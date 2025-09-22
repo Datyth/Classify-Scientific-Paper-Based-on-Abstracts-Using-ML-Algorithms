@@ -1,19 +1,24 @@
 # scripts/predict.py
 # =========================================
-ART_DIR    = r"artifacts"
-MODEL_NAME = "decision_tree"   # "knn" | "decision_tree" | "mlp" | "kmeans" | "transformer"
+ART_DIR    = r"artifacts"     # or absolute path if you prefer
+MODEL_NAME = "knn"            # "knn" | "decision_tree" | "mlp" | "kmeans" | "transformer"
+THRESHOLD = 0.35              # soften for KNN; try 0.35–0.45
+TOP_K_FALLBACK = 1            # ensure at least k labels if threshold yields none
 TEXTS = [
-    """State-of-the-art computer vision systems are trained to predict a fixed set of predetermined object categories. This restricted form of supervision limits their generality and usability since additional labeled data is needed to specify any other visual concept. Learning directly from raw text about images is a promising alternative which leverages a much broader source of supervision. We demonstrate that the simple pre-training task of predicting which caption goes with which image is an efficient and scalable way to learn SOTA image representations from scratch on a dataset of 400 million (image, text) pairs collected from the internet. After pre-training, natural language is used to reference learned visual concepts (or describe new ones) enabling zero-shot transfer of the model to downstream tasks. We study the performance of this approach by benchmarking on over 30 different existing computer vision datasets, spanning tasks such as OCR, action recognition in videos, geo-localization, and many types of fine-grained object classification. The model transfers non-trivially to most tasks and is often competitive with a fully supervised baseline without the need for any dataset specific training. For instance, we match the accuracy of the original ResNet-50 on ImageNet zero-shot without needing to use any of the 1.28 million training examples it was trained on. We release our code and pre-trained model weights at"""
+    """In this lecture I give a pedagogical introduction to inflationary cosmology
+with a special focus on the quantum generation of cosmological perturbations.
+""",
 ]
 # =========================================
 
 import os, sys
+from pathlib import Path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from joblib import load
-from pathlib import Path
+import numpy as np
 
 def _embed_sbert(texts, model_name="sentence-transformers/all-MiniLM-L6-v2"):
     from sentence_transformers import SentenceTransformer
@@ -22,21 +27,91 @@ def _embed_sbert(texts, model_name="sentence-transformers/all-MiniLM-L6-v2"):
     X = model.encode(list(texts), batch_size=64, show_progress_bar=False,
                      convert_to_numpy=True, normalize_embeddings=False)
     return normalize(X)
+
+def _binarize_with_fallback(A, kind="proba"):
+    """
+    A: (n_samples, n_labels) probabilities or scores.
+    """
+    if kind == "proba":
+        y = (A >= THRESHOLD).astype(int)
+    else:  # scores
+        y = (A > 0).astype(int)
+
+    for i in range(y.shape[0]):
+        if y[i].sum() == 0:
+            top = np.argsort(-A[i])[:TOP_K_FALLBACK]
+            y[i, top] = 1
+    return y
+
+def _predict_labels(pipe, texts):
+    """
+    Try proba -> decision_function -> predict, with threshold & top-k fallback.
+    If the pipeline expects vectors (e.g., transformer artifact without SBERT),
+    we embed first.
+    """
+    # 1) try predict_proba
+    if hasattr(pipe, "predict_proba"):
+        try:
+            proba = pipe.predict_proba(texts)
+            return _binarize_with_fallback(proba, kind="proba")
+        except Exception:
+            pass
+
+    # 2) try decision_function
+    if hasattr(pipe, "decision_function"):
+        try:
+            scores = pipe.decision_function(texts)
+            if scores.ndim == 1:
+                scores = scores[:, None]
+            return _binarize_with_fallback(scores, kind="score")
+        except Exception:
+            pass
+
+    # 3) raw predict (may need embedding)
+    try:
+        y = pipe.predict(texts)
+        # if any empty rows, try to rank via last step if possible
+        if hasattr(y, "sum") and (y.sum(axis=1) == 0).any():
+            last = getattr(pipe, "steps", [])[-1][1] if hasattr(pipe, "steps") else None
+            if last is not None:
+                try:
+                    if hasattr(last, "predict_proba"):
+                        Z = getattr(pipe, "__getitem__", None)
+                        Z = pipe[:-1].transform(texts) if Z else texts
+                        proba = last.predict_proba(Z)
+                        return _binarize_with_fallback(proba, kind="proba")
+                    if hasattr(last, "decision_function"):
+                        Z = pipe[:-1].transform(texts)
+                        scores = last.decision_function(Z)
+                        if scores.ndim == 1:
+                            scores = scores[:, None]
+                        return _binarize_with_fallback(scores, kind="score")
+                except Exception:
+                    pass
+        return y
+    except ValueError:
+        # Transform texts first (artifact expects vectors)
+        X = _embed_sbert(texts)
+        if hasattr(pipe, "predict_proba"):
+            proba = pipe.predict_proba(X)
+            return _binarize_with_fallback(proba, kind="proba")
+        if hasattr(pipe, "decision_function"):
+            scores = pipe.decision_function(X)
+            if scores.ndim == 1:
+                scores = scores[:, None]
+            return _binarize_with_fallback(scores, kind="score")
+        return pipe.predict(X)
+
 def main():
     model_path = Path(ART_DIR) / f"{MODEL_NAME}.joblib"
     mlb_path   = Path(ART_DIR) / f"{MODEL_NAME}.mlb.joblib"
+    print("[DEBUG] loading:", model_path.resolve())
 
     arts = load(model_path)   # FitArtifacts(pipeline=..., mlb=...)
     pipe = arts.pipeline
     mlb  = arts.mlb or (load(mlb_path) if mlb_path.exists() else None)
 
-    try:
-        # Works for KNN/DT/MLP/KMeans that have SBERT inside the pipeline
-        y_pred_bin = pipe.predict(TEXTS)
-    except ValueError:
-        # Transformer artifact = classifier only → embed first, then predict
-        X = _embed_sbert(TEXTS)  # default to all-MiniLM-L6-v2
-        y_pred_bin = pipe.predict(X)
+    y_pred_bin = _predict_labels(pipe, TEXTS)
 
     if mlb is not None:
         labels = [list(lbls) for lbls in mlb.inverse_transform(y_pred_bin)]
