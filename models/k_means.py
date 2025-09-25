@@ -1,57 +1,71 @@
-from collections import Counter
-import numpy as np
-from sklearn.pipeline import Pipeline
-from sklearn.cluster import KMeans
-from .base.base import BaseModel, FitArtifacts, SBERTVectorizer
+# models/classifiers/kmeans.py
+from __future__ import annotations
 from typing import Optional
+import numpy as np
+from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.cluster import KMeans
 
-class KMeansModel(BaseModel):
-    def __init__(self, n_clusters: int = 20, random_state: int = 42, **kwargs):
+from models.base.base import BaseModel  # adjust path if different
+
+class KMeansLabelMapper(BaseEstimator, ClassifierMixin):
+    """KMeans + majority-label mapping → returns one-hot over n_labels."""
+    def __init__(self, n_clusters: int = 5, random_state: int = 42, max_iter: int = 300):
+        self.n_clusters = n_clusters
+        self.random_state = random_state
+        self.max_iter = max_iter
+        self.kmeans_: Optional[KMeans] = None
+        self.label_map_: Optional[np.ndarray] = None  # [n_clusters] -> label_idx
+        self.n_labels_: Optional[int] = None
+
+    def fit(self, X, Y=None):
+        if Y is None:
+            raise ValueError("KMeansLabelMapper requires Y (binary labels) to build cluster→label mapping.")
+        X = np.asarray(X)
+        Y = np.asarray(Y)
+        self.n_labels_ = Y.shape[1]
+
+        self.kmeans_ = KMeans(
+            n_clusters=self.n_clusters, n_init="auto",
+            random_state=self.random_state, max_iter=self.max_iter
+        ).fit(X)
+
+        clusters = self.kmeans_.labels_
+        self.label_map_ = np.zeros(self.n_clusters, dtype=int)
+        for c in range(self.n_clusters):
+            idx = np.where(clusters == c)[0]
+            if len(idx) == 0:
+                self.label_map_[c] = 0
+            else:
+                counts = Y[idx].sum(axis=0)
+                self.label_map_[c] = int(np.argmax(counts))
+        return self
+
+    def predict(self, X):
+        if self.kmeans_ is None or self.label_map_ is None or self.n_labels_ is None:
+            raise RuntimeError("Model not fitted.")
+        cids = self.kmeans_.predict(X)  # [n_samples]
+        Yp = np.zeros((len(cids), self.n_labels_), dtype=int)
+        for i, c in enumerate(cids):
+            j = int(self.label_map_[int(c)])
+            Yp[i, j] = 1
+        return Yp
+
+
+class KMeansClassifier(BaseModel):
+    """BaseModel wrapper so SBERT lives in the pipeline; no OvR wrapping."""
+    def __init__(self, n_clusters: int = 5, random_state: int = 42, max_iter: int = 300, **kwargs):
         super().__init__(**kwargs)
         self.n_clusters = n_clusters
         self.random_state = random_state
-        self._cluster_to_label: Optional[dict[int, str]] = None
+        self.max_iter = max_iter
 
     def _build_estimator(self):
-        return KMeans(n_clusters=self.n_clusters, n_init=10, random_state=self.random_state)
+        return KMeansLabelMapper(
+            n_clusters=self.n_clusters,
+            random_state=self.random_state,
+            max_iter=self.max_iter
+        )
 
     def _wrap_supervised(self, estimator):
-        # No wrapping for clustering
+        # IMPORTANT: don't wrap KMeans in OneVsRest
         return estimator
-
-    def fit(self, texts, labels=None):
-        # SBERT embedding followed by KMeans clustering
-        sb = SBERTVectorizer()
-        steps = [("sbert", sb), ("kmeans", self._build_estimator())]
-        pipe = Pipeline(steps)
-        pipe.fit(list(texts))
-        self.artifacts = FitArtifacts(pipeline=pipe, mlb=None)
-
-        # 1 single label case
-        if labels is not None:
-            y_simple = []
-            for y in labels:
-                if y is None:
-                    y_simple.append(None)
-                elif isinstance(y, str):
-                    lab = [t for t in y.replace(";", " ").replace(",", " ").split() if t]
-                    y_simple.append(lab[0] if lab else None)
-                else:
-                    y_simple.append(str(y[0]).strip() if len(y) else None)
-            clusters = pipe.predict(list(texts))
-            mapping: dict[int, str] = {}
-            for c in np.unique(clusters):
-                idx = np.where(clusters == c)[0]
-                labs = [y_simple[i] for i in idx if y_simple[i] is not None]
-                mapping[int(c)] = Counter(labs).most_common(1)[0][0] if labs else str(int(c))
-            self._cluster_to_label = mapping
-
-        return self
-
-    def predict(self, texts):
-        if not self.artifacts:
-            raise RuntimeError("Model not fitted.")
-        clusters = self.artifacts.pipeline.predict(list(texts))
-        if self._cluster_to_label:
-            return [[self._cluster_to_label.get(int(c), str(int(c)))] for c in clusters]
-        return [[str(int(c))] for c in clusters]

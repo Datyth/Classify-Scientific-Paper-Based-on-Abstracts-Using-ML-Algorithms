@@ -1,7 +1,7 @@
 # scripts/train.py
 # =========================================
 # Hard-coded parameters
-MODEL_NAME       = "knn"  # "knn" | "decision_tree"  | "kmeans" | "transformer"
+MODEL_NAME       = "decision_tree"  # "knn" | "decision_tree"  | "kmeans" | "transformer"
 PRUNE_MIN_COUNT  = 2      # drop labels with < count (set 0/None to disable)
 CATEGORIES_TO_SELECT = ['astro-ph', 'cond-mat', 'cs', 'math', 'physics']
 SEED             = 42
@@ -19,9 +19,12 @@ import pandas as pd
 from sklearn.preprocessing import MultiLabelBinarizer
 from joblib import dump
 
+from sklearn.model_selection import train_test_split
+
 # Paths
 CSV_PATH  = os.path.join(PROJECT_ROOT, "Apply-Machine-Learning-to-Classify-Scientific-Paper-Based-on-Abstracts-","data", "csv", "arxiv_clean_sample-5k.csv")
 ART_DIR   = os.path.join(PROJECT_ROOT, "Apply-Machine-Learning-to-Classify-Scientific-Paper-Based-on-Abstracts-","data","artifacts")
+CSV_OUT_DIR = os.path.join(PROJECT_ROOT, "Apply-Machine-Learning-to-Classify-Scientific-Paper-Based-on-Abstracts-","data", "csv")
 Path(ART_DIR).mkdir(parents=True, exist_ok=True)
 
 from models.base.factory import ModelFactory
@@ -78,16 +81,46 @@ def main():
 
     model = ModelFactory.create(MODEL_NAME)
 
-    labels_for_kmeans = mlb.inverse_transform(Y)
-    model.fit(X_text, labels=labels_for_kmeans)
+    # ---- stratified split (multilabel-aware if package is available) ----
+    try:
+        from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
+        msss = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=SEED)
+        idx = np.arange(len(X_text))
+        (train_idx, val_idx) = next(msss.split(idx, Y))
+        print("[INFO] Used MultilabelStratifiedShuffleSplit (80/20).")
+    except Exception:
+        # Fallback: random split (not stratified but OK if package missing)
+        print("[WARN] iterative-stratification not found; falling back to random split (80/20).")
+        idx = np.arange(len(X_text))
+        train_idx, val_idx = train_test_split(idx, test_size=0.2, random_state=SEED, shuffle=True)
 
+    # Build splits
+    X_train = [X_text[i] for i in train_idx]
+    Y_train = Y[train_idx]
+    X_val   = [X_text[i] for i in val_idx]
+    Y_val   = Y[val_idx]
+
+    # Fit on TRAIN only (pass labels so kmeans mapper can learn cluster→label)
+    labels_train = mlb.inverse_transform(Y_train)
+    model.fit(X_train, labels=labels_train)
+
+    # ---- save a validation CSV for evaluate.py ----
+    val_path =Path(CSV_OUT_DIR)/"val_split.csv"
+    pd.DataFrame({
+        "text_clean": X_val,
+        "label": [" ".join(labs) for labs in mlb.inverse_transform(Y_val)]
+    }).to_csv(val_path, index=False)
+    print(f"[OK] Wrote validation split -> {val_path}")
+
+    # ---- save artifacts ----
     model_path = Path(ART_DIR) / f"{MODEL_NAME}.joblib"
     mlb_path   = Path(ART_DIR) / f"{MODEL_NAME}.mlb.joblib"
     saved_path = model.save(model_path)
-    dump(mlb, mlb_path)
+    dump(mlb, mlb_path, compress=3, protocol=5)
 
     print(f"[OK] Saved model -> {saved_path}")
     print(f"[OK] Saved label binarizer -> {mlb_path}")
+
 
 if __name__ == "__main__":
     main()
