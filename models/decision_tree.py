@@ -1,4 +1,4 @@
-from sklearn.tree import DecisionTreeClassifier as _DT
+from sklearn.tree import DecisionTreeClassifier
 from .base.base import BaseModel
 
 class DecisionTreeClassifier(BaseModel):
@@ -8,4 +8,4 @@ class DecisionTreeClassifier(BaseModel):
         self.class_weight = class_weight
 
     def _build_estimator(self):
-        return _DT(max_depth=self.max_depth, class_weight=self.class_weight)
+        return DecisionTreeClassifier(max_depth=self.max_depth, class_weight=self.class_weight)

@@ -1,0 +1,23 @@
+{
+  "categories": [
+    "astro-ph",
+    "cond-mat",
+    "cs",
+    "math",
+    "physics"
+  ],
+  "text_col": "text_clean",
+  "label_col": "label",
+  "seed": 42,
+  "test_size": 0.2,
+  "classes": [
+    "astro-ph",
+    "cond-mat",
+    "cs",
+    "math",
+    "physics"
+  ],
+  "train_samples": 3416,
+  "val_samples": 855,
+  "total_samples": 4271
+}

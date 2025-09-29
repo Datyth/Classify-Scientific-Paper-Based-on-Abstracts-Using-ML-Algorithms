@@ -1,126 +1,196 @@
-# scripts/train.py
-# =========================================
-# Hard-coded parameters
-MODEL_NAME       = "decision_tree"  # "knn" | "decision_tree"  | "kmeans" | "transformer"
-PRUNE_MIN_COUNT  = 2      # drop labels with < count (set 0/None to disable)
-CATEGORIES_TO_SELECT = ['astro-ph', 'cond-mat', 'cs', 'math', 'physics']
-SEED             = 42
-# =========================================
-
-# Make package importable when run directly
+# scripts/train_model.py
 import os, sys
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
+import argparse
+import json
 from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MultiLabelBinarizer
-from joblib import dump
+from joblib import dump, load
 
-from sklearn.model_selection import train_test_split
+# Make package importable when run directly
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-# Paths
-CSV_PATH  = os.path.join(PROJECT_ROOT, "Apply-Machine-Learning-to-Classify-Scientific-Paper-Based-on-Abstracts-","data", "csv", "arxiv_clean_sample-5k.csv")
-ART_DIR   = os.path.join(PROJECT_ROOT, "Apply-Machine-Learning-to-Classify-Scientific-Paper-Based-on-Abstracts-","data","artifacts")
-CSV_OUT_DIR = os.path.join(PROJECT_ROOT, "Apply-Machine-Learning-to-Classify-Scientific-Paper-Based-on-Abstracts-","data", "csv")
-Path(ART_DIR).mkdir(parents=True, exist_ok=True)
+# Available models dictionary
+MODELS = {
+    "knn": "models.knn.KNNClassifier",
+    "decision_tree": "models.decision_tree.DecisionTreeClassifier", 
+    "kmeans": "models.k_means.KMeansClassifier",
+    "transformer": "models.transformer.TransformerModel"
+}
 
-from models.base.factory import ModelFactory
+def import_model_class(model_key: str):
+    """
+    Dynamically import model class only when needed to avoid environment conflicts.
 
-def _parse_labels(raw):
-    import re
-    if raw is None:
-        return []
-    toks = re.split(r"[,\;/\|]|\s+", str(raw).strip())
-    toks = [t.strip().lower() for t in toks if t and t.strip()]
-    seen, out = set(), []
-    for t in toks:
-        if t not in seen:
-            seen.add(t)
-            out.append(t)
-    return out
-def _to_toplevel(lbl: str) -> str:
-    if "." in lbl:
-        return lbl.split(".", 1)[0].lower()
-    return lbl.lower()
-def _prepare_xy_topcats(df: pd.DataFrame, text_col: str, label_col: str, cats: list[str]):
-    X_text = df[text_col].astype(str)
-    y_raw  = df[label_col].apply(_parse_labels)
-    y_top = []
-    keep_rows = []
-    catset = set(c.lower() for c in cats)
-    for i, labels in enumerate(y_raw):
-        mapped = list({ _to_toplevel(l) for l in labels })  # dedupe per sample
-        filtered = [t for t in mapped if t in catset]
-        if filtered:
-            y_top.append(filtered)
-            keep_rows.append(True)
-        else:
-            keep_rows.append(False)
+    Args:
+        model_key: Key from MODELS dict
 
-    # filter rows
-    X_text = X_text[keep_rows].reset_index(drop=True)
-    y_top  = pd.Series(y_top)
-    mlb = MultiLabelBinarizer(classes=sorted(catset))
-    Y = mlb.fit_transform(y_top)
+    Returns:
+        Model class
+    """
+    if model_key not in MODELS:
+        raise ValueError(f"Unknown model: {model_key}. Available: {list(MODELS.keys())}")
 
-    return X_text.tolist(), Y, mlb
+    module_path, class_name = MODELS[model_key].rsplit('.', 1)
 
+    try:
+        print(f"Importing {class_name} from {module_path}...")
+        module = __import__(module_path, fromlist=[class_name])
+        model_class = getattr(module, class_name)
+        return model_class
+    except ImportError as e:
+        print(f"Failed to import {class_name}: {e}")
+        print(f"Make sure the required dependencies for {model_key} are installed")
+        raise
+    except AttributeError as e:
+        print(f"Class {class_name} not found in {module_path}: {e}")
+        raise
+
+def load_split_data(csv_out_dir, art_dir, text_col, label_col):
+    """Load pre-split data and label binarizer"""
+
+    # Load train data
+    train_path = Path(csv_out_dir) / "train_split.csv"
+    train_df = pd.read_csv(train_path)
+    X_train = train_df[text_col].tolist()
+
+    # Load validation data  
+    val_path = Path(csv_out_dir) / "val_split.csv"
+    val_df = pd.read_csv(val_path)
+    X_val = val_df[text_col].tolist()
+
+    # Load label binarizer
+    mlb_path = Path(art_dir) / "label_binarizer.joblib"
+    mlb = load(mlb_path)
+
+    # Convert labels back to binary format
+    def parse_labels_from_string(label_string):
+        if pd.isna(label_string) or label_string == "":
+            return []
+        return label_string.split()
+
+    train_labels = train_df[label_col].apply(parse_labels_from_string).tolist()
+    val_labels = val_df[label_col].apply(parse_labels_from_string).tolist()
+
+    Y_train = mlb.transform(train_labels)
+    Y_val = mlb.transform(val_labels)
+
+    return X_train, Y_train, X_val, Y_val, mlb
+
+def setup_paths():
+    """Setup file paths"""
+    art_dir = os.path.join(PROJECT_ROOT, "Apply-Machine-Learning-to-Classify-Scientific-Paper-Based-on-Abstracts-", "clean_data", "artifacts")
+    csv_out_dir = os.path.join(PROJECT_ROOT, "Apply-Machine-Learning-to-Classify-Scientific-Paper-Based-on-Abstracts-", "clean_data", "splitted_data")
+    return art_dir, csv_out_dir
 
 def main():
-    TEXT_COL, LABEL_COL = "text_clean", "label"
-    df = pd.read_csv(CSV_PATH).dropna(subset=[TEXT_COL, LABEL_COL]).reset_index(drop=True)
+    parser = argparse.ArgumentParser(
+        description="Train machine learning model for scientific paper classification")
 
-    X_text, Y, mlb = _prepare_xy_topcats(df, TEXT_COL, LABEL_COL, CATEGORIES_TO_SELECT)
+    parser.add_argument("--model", type=str, choices=MODELS.keys(),
+                        help=f"Name of the model to train. Choices: {list(MODELS.keys())}")
 
-    print(f"[INFO] Samples kept: {len(X_text)}")
-    print(f"[INFO] Classes: {list(mlb.classes_)}")
-    print("[INFO] Label counts:\n", pd.Series(Y.sum(axis=0), index=mlb.classes_).astype(int))
+    parser.add_argument("--text_col", type=str, default="text_clean",
+                        help="Name of the text column")
 
-    model = ModelFactory.create(MODEL_NAME)
+    parser.add_argument("--label_col", type=str, default="label", 
+                        help="Name of the label column")
 
-    # ---- stratified split (multilabel-aware if package is available) ----
+    args = parser.parse_args()
+
+    print(f"Starting training with {args.model} model...")
+    print(f"Configuration:")
+    print(f"   - Model: {args.model}")
+    print(f"   - Text column: {args.text_col}")
+    print(f"   - Label column: {args.label_col}")
+
+    # Setup paths
     try:
-        from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
-        msss = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=SEED)
-        idx = np.arange(len(X_text))
-        (train_idx, val_idx) = next(msss.split(idx, Y))
-        print("[INFO] Used MultilabelStratifiedShuffleSplit (80/20).")
-    except Exception:
-        # Fallback: random split (not stratified but OK if package missing)
-        print("[WARN] iterative-stratification not found; falling back to random split (80/20).")
-        idx = np.arange(len(X_text))
-        train_idx, val_idx = train_test_split(idx, test_size=0.2, random_state=SEED, shuffle=True)
+        art_dir, csv_out_dir = setup_paths()
+        print(f"Artifacts dir: {art_dir}")
+        print(f"CSV output dir: {csv_out_dir}")
+    except Exception as e:
+        print(f"Error setting up paths: {e}")
+        return 1
 
-    # Build splits
-    X_train = [X_text[i] for i in train_idx]
-    Y_train = Y[train_idx]
-    X_val   = [X_text[i] for i in val_idx]
-    Y_val   = Y[val_idx]
+    # Load split configuration
+    try:
+        config_path = Path(art_dir) / "split_config.json"
+        with open(config_path, 'r', encoding='utf-8') as f:
+            split_config = json.load(f)
+        print("Loaded split configuration:")
+        print(f"   - Classes: {split_config['classes']}")
+        print(f"   - Train samples: {split_config['train_samples']}")
+        print(f"   - Val samples: {split_config['val_samples']}")
+    except Exception as e:
+        print(f"Error loading split configuration: {e}")
+        print("Make sure to run data_splitter.py first!")
+        return 1
 
-    # Fit on TRAIN only (pass labels so kmeans mapper can learn cluster→label)
-    labels_train = mlb.inverse_transform(Y_train)
-    model.fit(X_train, labels=labels_train)
+    # Load pre-split data
+    try:
+        print("Loading pre-split data...")
+        X_train, Y_train, X_val, Y_val, mlb = load_split_data(
+            csv_out_dir, art_dir, args.text_col, args.label_col
+        )
+        print(f"Loaded train data: {len(X_train)} samples")
+        print(f"Loaded validation data: {len(X_val)} samples")
+    except Exception as e:
+        print(f"Error loading split data: {e}")
+        print("Make sure to run data_splitter.py first!")
+        return 1
 
-    # ---- save a validation CSV for evaluate.py ----
-    val_path =Path(CSV_OUT_DIR)/"val_split.csv"
-    pd.DataFrame({
-        "text_clean": X_val,
-        "label": [" ".join(labs) for labs in mlb.inverse_transform(Y_val)]
-    }).to_csv(val_path, index=False)
-    print(f"[OK] Wrote validation split -> {val_path}")
+    # Import and create model
+    try:
+        ModelClass = import_model_class(args.model)
+        model = ModelClass()
+        print(f"Successfully created {args.model} model")
+    except Exception as e:
+        print(f"Failed to create {args.model} model: {e}")
+        return 1
 
-    # ---- save artifacts ----
-    model_path = Path(ART_DIR) / f"{MODEL_NAME}.joblib"
-    mlb_path   = Path(ART_DIR) / f"{MODEL_NAME}.mlb.joblib"
-    saved_path = model.save(model_path)
-    dump(mlb, mlb_path, compress=3, protocol=5)
+    # Train model
+    try:
+        print(f"Training {args.model} model...")
+        labels_train = mlb.inverse_transform(Y_train)
+        model.fit(X_train, labels=labels_train)
+        print("Model training completed!")
+    except Exception as e:
+        print(f"Error during model training: {e}")
+        return 1
 
-    print(f"[OK] Saved model -> {saved_path}")
-    print(f"[OK] Saved label binarizer -> {mlb_path}")
+    # Save trained model and artifacts
+    try:
+        print("Saving model artifacts...")
+        model_path = Path(art_dir) / f"{args.model}.joblib"
 
+        saved_path = model.save(model_path)
+        print(f"Saved model -> {saved_path}")
+
+        # Save training configuration
+        train_config_path = Path(art_dir) / f"{args.model}.train_config.json"
+        train_config = {
+            "model_name": args.model,
+            "text_col": args.text_col,
+            "label_col": args.label_col,
+            "classes": list(mlb.classes_),
+            "train_samples": len(X_train),
+            "val_samples": len(X_val)
+        }
+
+        with open(train_config_path, 'w', encoding='utf-8') as f:
+            json.dump(train_config, f, ensure_ascii=False, indent=2)
+        print(f"Saved training config -> {train_config_path}")
+
+    except Exception as e:
+        print(f"Error saving artifacts: {e}")
+        return 1
+
+    print("Training completed successfully!")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    exit(main())

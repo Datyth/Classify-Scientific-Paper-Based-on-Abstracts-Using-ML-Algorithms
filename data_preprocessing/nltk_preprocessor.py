@@ -2,18 +2,17 @@ import re, string
 from typing import Optional
 import pandas as pd
 
-# --- NLTK setup
 import nltk
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords, wordnet
+from nltk.stem import WordNetLemmatizer, PorterStemmer
+from nltk import pos_tag
+
 for pkg in ["punkt", "stopwords", "wordnet", "omw-1.4", "averaged_perceptron_tagger"]:
     try:
         nltk.data.find("tokenizers/punkt" if pkg == "punkt" else pkg)
     except LookupError:
         nltk.download(pkg, quiet=True)
-
-from nltk.tokenize import word_tokenize
-from nltk.corpus import stopwords, wordnet
-from nltk.stem import WordNetLemmatizer, PorterStemmer
-from nltk import pos_tag
 
 STOP = set(stopwords.words("english"))
 LEMMATIZER = WordNetLemmatizer()
@@ -23,9 +22,9 @@ URL_RE = re.compile(r'https?://\S+|www\.\S+')
 NUM_RE = re.compile(r'\b\d+(\.\d+)?\b')
 PUNCT_TABLE = str.maketrans('', '', string.punctuation)
 
-__all__ = ["TextClassifier"] 
+__all__ = ["TextProcessor"] 
 
-class TextClassifier:
+class TextProcessor:
     def __init__(self, *, use_stem: bool = False, min_token_len: int = 2):
         self.use_stem = use_stem
         self.min_token_len = min_token_len
@@ -68,7 +67,7 @@ class TextClassifier:
     def preprocess_hf(dataset_id: str, split="train", text_col="text", label_col: Optional[str]=None,
                       sample: Optional[int]=20000, out_csv="clean.csv", use_stem=False):
         from datasets import load_dataset
-        tc = TextClassifier(use_stem=use_stem)
+        tc = TextProcessor(use_stem=use_stem)
         ds = load_dataset(dataset_id, split=split)
         if sample and sample < len(ds):
             ds = ds.shuffle(seed=42).select(range(sample))
@@ -93,7 +92,7 @@ class TextClassifier:
     @staticmethod
     def preprocess_csv(path: str, text_col="text", label_col: Optional[str]=None,
                        sample: Optional[int]=None, out_csv="clean.csv", use_stem=False):
-        tc = TextClassifier(use_stem=use_stem)
+        tc = TextProcessor(use_stem=use_stem)
         df = pd.read_csv(path)
         if sample and sample < len(df):
             df = df.sample(n=sample, random_state=42)

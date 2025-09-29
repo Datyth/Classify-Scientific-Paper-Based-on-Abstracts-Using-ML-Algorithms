@@ -1,9 +1,9 @@
-from nltk_preprocessor import TextClassifier
+from nltk_preprocessor import TextProcessor
 from pathlib import Path
 if __name__ == "__main__":
     here = Path(__file__).resolve().parent
     out_csv = here / "arxiv_clean_sample.csv" 
-    TextClassifier.preprocess_hf(
+    TextProcessor.preprocess_hf(
         dataset_id="gfissore/arxiv-abstracts-2021",
         split="train",
         text_col="abstract",
