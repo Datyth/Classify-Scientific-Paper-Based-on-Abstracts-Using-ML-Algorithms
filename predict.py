@@ -70,16 +70,16 @@ def _binarize_with_fallback(A, threshold, top_k, kind="proba"):
 
 def _predict_labels(pipe, texts, mlb, threshold, top_k):
     """Enhanced prediction function with better error handling for different model types"""
-    print(f"Đang dự đoán với {len(texts)} văn bản...")
+    print(f"Predicting for {len(texts)} texts...")
     
     # Get number of expected classes
     n_classes = len(mlb.classes_) if mlb is not None else 1
-    print(f"Số lượng classes dự kiến: {n_classes}")
+    print(f"Expected number of classes: {n_classes}")
     
     # Try predict_proba first (for probabilistic models)
     if hasattr(pipe, "predict_proba"):
         try:
-            print("Sử dụng predict_proba...")
+            print("Using predict_proba...")
             proba = pipe.predict_proba(texts)
             
             # Handle different proba formats
@@ -94,7 +94,7 @@ def _predict_labels(pipe, texts, mlb, threshold, top_k):
             
             # Ensure correct shape
             if proba.shape[1] != n_classes:
-                print(f"Cảnh báo: predict_proba trả về {proba.shape[1]} classes, dự kiến {n_classes}")
+                print(f"Warning: predict_proba returned {proba.shape[1]} classes, expected {n_classes}")
                 if proba.shape[1] < n_classes:
                     # Pad with zeros
                     padding = np.zeros((proba.shape[0], n_classes - proba.shape[1]))
@@ -106,12 +106,12 @@ def _predict_labels(pipe, texts, mlb, threshold, top_k):
             return _binarize_with_fallback(proba, threshold, top_k, kind="proba")
             
         except Exception as e:
-            print(f"predict_proba thất bại: {e}")
+            print(f"predict_proba failed: {e}")
     
     # Try decision_function (for SVM-like models)
     if hasattr(pipe, "decision_function"):
         try:
-            print("Sử dụng decision_function...")
+            print("Using decision_function...")
             scores = pipe.decision_function(texts)
             if scores.ndim == 1:
                 if n_classes == 2:  # Binary case
@@ -130,20 +130,20 @@ def _predict_labels(pipe, texts, mlb, threshold, top_k):
             return _binarize_with_fallback(scores, 0, top_k, kind="score")
             
         except Exception as e:
-            print(f"decision_function thất bại: {e}")
+            print(f"decision_function failed: {e}")
     
     # Try direct predict (for clustering models like KMeans)
     try:
-        print("Sử dụng predict...")
+        print("Using predict...")
         y_pred = pipe.predict(texts)
-        print(f"Predict trả về shape: {np.array(y_pred).shape}")
+        print(f"Predict returned shape: {np.array(y_pred).shape}")
         
         if isinstance(y_pred, list):
             y_pred = np.asarray(y_pred)
         
         # Handle different prediction formats
         if y_pred.ndim == 1:
-            print("Xử lý single-class predictions...")
+            print("Processing single-class predictions...")
             # Single class prediction - convert to one-hot
             y_binary = np.zeros((len(y_pred), n_classes), dtype=int)
             for i, class_idx in enumerate(y_pred):
@@ -155,12 +155,12 @@ def _predict_labels(pipe, texts, mlb, threshold, top_k):
             return y_binary
         
         elif y_pred.ndim == 2:
-            print("Xử lý multi-label predictions...")
+            print("Processing multi-label predictions...")
             # Multi-label prediction (already binary)
             
             # Ensure correct shape
             if y_pred.shape[1] != n_classes:
-                print(f"Cảnh báo: Prediction shape {y_pred.shape[1]} != expected {n_classes}")
+                print(f"Warning: Prediction shape {y_pred.shape[1]} != expected {n_classes}")
                 if y_pred.shape[1] < n_classes:
                     # Pad with zeros
                     padding = np.zeros((y_pred.shape[0], n_classes - y_pred.shape[1]), dtype=int)
@@ -181,10 +181,10 @@ def _predict_labels(pipe, texts, mlb, threshold, top_k):
             raise ValueError(f"Unexpected prediction dimensionality: {y_pred.ndim}")
             
     except Exception as e:
-        print(f"predict thất bại: {e}")
+        print(f"predict failed: {e}")
         
         # Final fallback
-        print("Sử dụng fallback predictions...")
+        print("Using fallback predictions...")
         y_fallback = np.zeros((len(texts), n_classes), dtype=int)
         y_fallback[:, 0] = 1  # Assign all to first class
         return y_fallback
@@ -199,7 +199,7 @@ def compute_metrics(y_true, y_pred, average="macro"):
         y_true = np.asarray(y_true, dtype=int)
         y_pred = np.asarray(y_pred, dtype=int)
         
-        print(f"Tính toán metrics - Y_true shape: {y_true.shape}, Y_pred shape: {y_pred.shape}")
+        print(f"Computing metrics - Y_true shape: {y_true.shape}, Y_pred shape: {y_pred.shape}")
         
         if y_true.shape != y_pred.shape:
             raise ValueError(f"Shape mismatch: y_true {y_true.shape} vs y_pred {y_pred.shape}")
@@ -232,7 +232,7 @@ def compute_metrics(y_true, y_pred, average="macro"):
             }
             
     except Exception as e:
-        print(f"Lỗi tính toán metrics: {e}")
+        print(f"Error computing metrics: {e}")
         return {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0}
 
 
@@ -241,7 +241,7 @@ def plot_single_metric(value, title):
     plt.figure(figsize=(6, 4))
     bars = plt.bar([title], [value], color="#4e79a7", alpha=0.8, edgecolor='black', linewidth=1)
     plt.ylim(0, 1.05)
-    plt.ylabel('Điểm số', fontsize=12)
+    plt.ylabel('Score', fontsize=12)
     plt.title(f'{title.capitalize()}: {value:.4f}', fontsize=14, fontweight='bold')
     
     # Add value labels on bars
@@ -265,8 +265,8 @@ def plot_overview(metrics_dict, title):
     bars = plt.bar(keys, vals, color=colors, alpha=0.8, edgecolor='black', linewidth=1)
     plt.ylim(0, 1.05)
     plt.title(title, fontsize=16, fontweight='bold', pad=20)
-    plt.ylabel('Điểm số', fontsize=12)
-    plt.xlabel('Chỉ số', fontsize=12)
+    plt.ylabel('Score', fontsize=12)
+    plt.xlabel('Metrics', fontsize=12)
     
     # Add value labels on bars
     for bar, val in zip(bars, vals):
@@ -285,11 +285,11 @@ def plot_multilabel_confusion_matrices(y_true, y_pred, class_names):
     """Plot individual confusion matrices for each class in multilabel classification"""
     from sklearn.metrics import multilabel_confusion_matrix
     
-    print("Tạo confusion matrices cho từng class...")
+    print("Creating confusion matrices for each class...")
     
     # Compute multilabel confusion matrix
     mcm = multilabel_confusion_matrix(y_true, y_pred)
-    print(f"Shape của multilabel confusion matrix: {mcm.shape}")
+    print(f"Multilabel confusion matrix shape: {mcm.shape}")
     
     # Debug: Print some statistics
     for i, (cm, class_name) in enumerate(zip(mcm, class_names)):
@@ -311,7 +311,7 @@ def plot_multilabel_confusion_matrices(y_true, y_pred, class_names):
         ax = axes[i]
         
         # Create DataFrame for better control
-        df_cm = pd.DataFrame(cm, index=['Âm tính', 'Dương tính'], columns=['Âm tính', 'Dương tính'])
+        df_cm = pd.DataFrame(cm, index=['Negative', 'Positive'], columns=['Negative', 'Positive'])
         
         # Plot heatmap WITHOUT mask - show all values including zeros
         sns.heatmap(df_cm, annot=True, fmt='d', cmap='Blues', 
@@ -319,9 +319,9 @@ def plot_multilabel_confusion_matrices(y_true, y_pred, class_names):
                    annot_kws={'size': 14, 'weight': 'bold'},
                    vmin=0)  # Ensure 0 values are properly colored
         
-        ax.set_title(f'Lớp: {class_name}', fontsize=14, fontweight='bold', pad=15)
-        ax.set_xlabel('Dự đoán', fontsize=12)
-        ax.set_ylabel('Thực tế', fontsize=12)
+        ax.set_title(f'Class: {class_name}', fontsize=14, fontweight='bold', pad=15)
+        ax.set_xlabel('Predicted', fontsize=12)
+        ax.set_ylabel('Actual', fontsize=12)
         
         # Rotate labels for better readability
         ax.tick_params(axis='x', labelrotation=45)
@@ -331,7 +331,7 @@ def plot_multilabel_confusion_matrices(y_true, y_pred, class_names):
     for i in range(n_classes, len(axes)):
         axes[i].axis('off')
     
-    plt.suptitle('Ma trận nhầm lẫn cho từng Lớp (Multilabel)', fontsize=16, fontweight='bold', y=0.98)
+    plt.suptitle('Confusion Matrix for Each Class (Multilabel)', fontsize=16, fontweight='bold', y=0.98)
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)
     plt.show()
@@ -341,14 +341,14 @@ def plot_overall_confusion_matrix(y_true, y_pred, class_names):
     """Plot overall confusion matrix by treating multilabel as multiclass problem"""
     from sklearn.metrics import confusion_matrix
     
-    print("Tạo ma trận nhầm lẫn tổng quan...")
+    print("Creating overall confusion matrix...")
     
     try:
         # Convert multilabel to single label by taking argmax
         y_true_single = np.argmax(y_true, axis=1)
         y_pred_single = np.argmax(y_pred, axis=1)
         
-        print(f"Chuyển đổi sang single-label:")
+        print(f"Converting to single-label:")
         print(f"Y_true_single shape: {y_true_single.shape}, unique values: {np.unique(y_true_single)}")
         print(f"Y_pred_single shape: {y_pred_single.shape}, unique values: {np.unique(y_pred_single)}")
         
@@ -366,15 +366,15 @@ def plot_overall_confusion_matrix(y_true, y_pred, class_names):
         # Create heatmap WITHOUT masking zero values
         sns.heatmap(df_cm, annot=True, fmt='d', cmap='Blues', 
                    linewidths=1.0, square=True,
-                   cbar_kws={'shrink': 0.8, 'label': 'Số lượng'},
+                   cbar_kws={'shrink': 0.8, 'label': 'Count'},
                    annot_kws={'size': 12, 'weight': 'bold'},
                    vmin=0)  # Show all values including zeros
         
         # Customize the plot
-        plt.title('Ma trận nhầm lẫn tổng quan (Argmax Predictions)', 
+        plt.title('Overall Confusion Matrix (Argmax Predictions)', 
                  fontsize=16, fontweight='bold', pad=20)
-        plt.xlabel('Nhãn dự đoán', fontsize=14)
-        plt.ylabel('Nhãn thực tế', fontsize=14)
+        plt.xlabel('Predicted Label', fontsize=14)
+        plt.ylabel('True Label', fontsize=14)
         
         # Rotate labels for better readability
         plt.xticks(rotation=45, ha='right')
@@ -384,7 +384,7 @@ def plot_overall_confusion_matrix(y_true, y_pred, class_names):
         plt.show()
         
     except Exception as e:
-        print(f"Lỗi tạo ma trận nhầm lẫn tổng quan: {e}")
+        print(f"Error creating overall confusion matrix: {e}")
         import traceback
         traceback.print_exc()
         
@@ -394,23 +394,23 @@ def plot_overall_confusion_matrix(y_true, y_pred, class_names):
 
 def plot_label_distribution(y_true, y_pred, class_names):
     """Plot label distribution comparison as alternative to confusion matrix"""
-    print("Tạo biểu đồ phân phối nhãn...")
+    print("Creating label distribution plot...")
     
     # Calculate label counts
     true_counts = y_true.sum(axis=0)
     pred_counts = y_pred.sum(axis=0)
     
-    print(f"Phân phối nhãn thực tế: {dict(zip(class_names, true_counts))}")
-    print(f"Phân phối nhãn dự đoán: {dict(zip(class_names, pred_counts))}")
+    print(f"True label distribution: {dict(zip(class_names, true_counts))}")
+    print(f"Predicted label distribution: {dict(zip(class_names, pred_counts))}")
     
     # Create comparison plot
     x = np.arange(len(class_names))
     width = 0.35
     
     plt.figure(figsize=(12, 6))
-    bars1 = plt.bar(x - width/2, true_counts, width, label='Nhãn thực tế', 
+    bars1 = plt.bar(x - width/2, true_counts, width, label='True Labels', 
                    color='#4e79a7', alpha=0.8, edgecolor='black')
-    bars2 = plt.bar(x + width/2, pred_counts, width, label='Nhãn dự đoán', 
+    bars2 = plt.bar(x + width/2, pred_counts, width, label='Predicted Labels', 
                    color='#f28e2b', alpha=0.8, edgecolor='black')
     
     # Add value labels on bars
@@ -420,9 +420,9 @@ def plot_label_distribution(y_true, y_pred, class_names):
             plt.text(bar.get_x() + bar.get_width()/2., height + 0.1,
                     f'{int(height)}', ha='center', va='bottom', fontsize=10, fontweight='bold')
     
-    plt.xlabel('Lớp', fontsize=12)
-    plt.ylabel('Số lượng', fontsize=12)
-    plt.title('Phân phối nhãn: Thực tế vs Dự đoán', fontsize=14, fontweight='bold')
+    plt.xlabel('Class', fontsize=12)
+    plt.ylabel('Count', fontsize=12)
+    plt.title('Label Distribution: True vs Predicted', fontsize=14, fontweight='bold')
     plt.xticks(x, class_names, rotation=45, ha='right')
     plt.legend()
     plt.grid(axis='y', alpha=0.3, linestyle='--')
@@ -449,12 +449,12 @@ def main():
     args = parser.parse_args()
 
     print("="*60)
-    print("KHỞI CHẠY DỰ ĐOÁN")
+    print("STARTING PREDICTION")
     print("="*60)
     print(f"Model: {args.model}")
-    print(f"Ngưỡng: {args.threshold}")
+    print(f"Threshold: {args.threshold}")
     print(f"Top-K fallback: {args.top_k}")
-    print(f"File dữ liệu: {args.texts_file}")
+    print(f"Data file: {args.texts_file}")
 
     # Setup paths
     art_dir, csv_out_dir = setup_paths()
@@ -463,18 +463,18 @@ def main():
     mlb_path = Path(art_dir) / "label_binarizer.joblib"
     config_path = Path(art_dir) / "split_config.json"
 
-    print(f"\nĐường dẫn:")
-    print(f"- Dữ liệu: {test_path}")
+    print(f"\nPaths:")
+    print(f"- Data: {test_path}")
     print(f"- Model: {model_path}")
     print(f"- Label binarizer: {mlb_path}")
 
     # Check file existence
     if not model_path.exists():
-        print(f"Lỗi: Không tìm thấy model tại {model_path}")
+        print(f"Error: Model not found at {model_path}")
         return
     
     if not test_path.exists():
-        print(f"Lỗi: Không tìm thấy file dữ liệu tại {test_path}")
+        print(f"Error: Data file not found at {test_path}")
         return
 
     # Load configuration if available
@@ -482,119 +482,119 @@ def main():
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-            print(f"\nCấu hình từ split_config:")
-            print(f"- Danh mục: {config.get('categories', [])}")
-            print(f"- Lớp: {config.get('classes', [])}")
-            print(f"- Tổng số mẫu: {config.get('total_samples', 'Không rõ')}")
+            print(f"\nConfiguration from split_config:")
+            print(f"- Categories: {config.get('categories', [])}")
+            print(f"- Classes: {config.get('classes', [])}")
+            print(f"- Total samples: {config.get('total_samples', 'Unknown')}")
         except Exception as e:
-            print(f"Không thể đọc config: {e}")
+            print(f"Cannot read config: {e}")
     
     # Load model
-    print(f"\nĐang tải model...")
+    print(f"\nLoading model...")
     arts = load(model_path)
     if hasattr(arts, "pipeline"):
         pipe = arts.pipeline
         mlb = getattr(arts, "mlb", None)
-        print("Đã tải pipeline model")
+        print("Loaded pipeline model")
     else:
         pipe = arts
         mlb = None
-        print("Đã tải direct model")
+        print("Loaded direct model")
 
     # Load label binarizer
     if mlb is None and mlb_path.exists():
         try:
             mlb = load(mlb_path)
-            print(f"Đã tải MultiLabelBinarizer với {len(mlb.classes_)} lớp")
-            print(f"Các lớp: {list(mlb.classes_)}")
+            print(f"Loaded MultiLabelBinarizer with {len(mlb.classes_)} classes")
+            print(f"Classes: {list(mlb.classes_)}")
         except Exception as e:
-            print(f"Không thể tải MultiLabelBinarizer: {e}")
+            print(f"Cannot load MultiLabelBinarizer: {e}")
             return
     elif mlb is not None:
-        print(f"Sử dụng MLB từ model với {len(mlb.classes_)} lớp")
+        print(f"Using MLB from model with {len(mlb.classes_)} classes")
 
     if mlb is None:
-        print("Không có MultiLabelBinarizer - không thể tiếp tục")
+        print("No MultiLabelBinarizer available - cannot continue")
         return
 
     # Load data
-    print(f"\nĐang đọc dữ liệu từ {test_path}")
+    print(f"\nReading data from {test_path}")
     try:
         df = pd.read_csv(test_path, encoding="utf-8")
-        print(f"Đã đọc {len(df)} dòng dữ liệu")
-        print(f"Các cột: {list(df.columns)}")
+        print(f"Read {len(df)} rows of data")
+        print(f"Columns: {list(df.columns)}")
         
         if "text_clean" not in df.columns:
-            raise KeyError("Thiếu cột 'text_clean' trong file CSV")
+            raise KeyError("Missing 'text_clean' column in CSV file")
         
         texts = df["text_clean"].astype(str).fillna("").tolist()
-        print(f"Đã đọc {len(texts)} văn bản")
+        print(f"Read {len(texts)} texts")
         
         # Read labels correctly - space-separated as created by data splitter
         labels = None
         if "label" in df.columns:
             label_strings = df["label"].fillna("").astype(str).tolist()
-            print(f"Đã đọc {len(label_strings)} chuỗi nhãn")
+            print(f"Read {len(label_strings)} label strings")
             
             # Show some example labels
-            print("Ví dụ chuỗi nhãn:")
+            print("Example label strings:")
             for i, lbl_str in enumerate(label_strings[:3]):
                 parsed = parse_space_separated_labels(lbl_str)
                 print(f"   {i+1}: '{lbl_str}' -> {parsed}")
             
             labels = label_strings
         else:
-            print("Không tìm thấy cột 'label' - chỉ thực hiện dự đoán")
+            print("No 'label' column found - performing prediction only")
             
     except Exception as e:
-        print(f"Lỗi đọc dữ liệu: {e}")
+        print(f"Error reading data: {e}")
         return
 
     # Make predictions
-    print(f"\nBẮT ĐẦU DỰ ĐOÁN")
+    print(f"\nSTARTING PREDICTION")
     print("="*60)
     try:
         y_pred = _predict_labels(pipe, texts, mlb, args.threshold, args.top_k)
-        print(f"Hoàn thành dự đoán với shape: {y_pred.shape}")
+        print(f"Completed prediction with shape: {y_pred.shape}")
     except Exception as e:
-        print(f"Lỗi trong quá trình dự đoán: {e}")
+        print(f"Error during prediction: {e}")
         import traceback
         traceback.print_exc()
         return
 
     # Convert predictions to labels
-    print(f"\nChuyển đổi dự đoán thành nhãn...")
+    print(f"\nConverting predictions to labels...")
     try:
         labels_out = [list(label_tuple) for label_tuple in mlb.inverse_transform(y_pred)]
-        print(f"Đã chuyển đổi {len(labels_out)} dự đoán")
+        print(f"Converted {len(labels_out)} predictions")
     except Exception as e:
-        print(f"Lỗi chuyển đổi nhãn: {e}")
-        labels_out = [["không rõ"] for _ in range(len(y_pred))]
+        print(f"Error converting labels: {e}")
+        labels_out = [["unknown"] for _ in range(len(y_pred))]
 
     # Display predictions
-    print(f"\nKẾT QUẢ DỰ ĐOÁN")
+    print(f"\nPREDICTION RESULTS")
     print("="*60)
     
-    for i, (text, labs) in enumerate(zip(texts[:5], labels_out[:5])):  # Show first 5
-        print(f"\nMẫu {i+1}:")
-        print(f"   Văn bản: {text[:150]}{'...' if len(text) > 150 else ''}")
-        print(f"   Dự đoán: {labs}")
+    for i, (text, labs) in enumerate(zip(texts[:5], labels_out[:5])): 
+        print(f"\nSample {i+1}:")
+        print(f"   Text: {text[:150]}{'...' if len(text) > 150 else ''}")
+        print(f"   Prediction: {labs}")
 
     if len(texts) > 5:
-        print(f"\n... và {len(texts) - 5} mẫu khác")
+        print(f"\n... and {len(texts) - 5} more samples")
 
     # Evaluate if true labels available
     if labels is not None:
-        print(f"\nĐÁNH GIÁ KẾT QUẢ")
+        print(f"\nEVALUATION RESULTS")
         print("="*60)
         
         try:
             # Parse true labels using the same format as data splitter
             y_true_labels = [parse_space_separated_labels(s) for s in labels]
-            print(f"Đã phân tích {len(y_true_labels)} danh sách nhãn thực tế")
+            print(f"Parsed {len(y_true_labels)} true label lists")
             
             # Show some examples
-            print("Ví dụ nhãn thực tế đã phân tích:")
+            print("Example parsed true labels:")
             for i in range(min(3, len(y_true_labels))):
                 print(f"   {i+1}: {y_true_labels[i]}")
             
@@ -602,49 +602,49 @@ def main():
             Y_true = mlb.transform(y_true_labels)
             Y_pred = y_pred
             
-            print(f"\nKích thước ma trận:")
+            print(f"\nMatrix dimensions:")
             print(f"   Y_true: {Y_true.shape}")
             print(f"   Y_pred: {Y_pred.shape}")
             
             # Ensure compatible shapes
             if Y_true.shape != Y_pred.shape:
-                print(f"Shape không khớp - cắt về kích thước chung")
+                print(f"Shape mismatch - trimming to common size")
                 min_rows = min(Y_true.shape[0], Y_pred.shape[0])
                 min_cols = min(Y_true.shape[1], Y_pred.shape[1])
                 Y_true = Y_true[:min_rows, :min_cols]
                 Y_pred = Y_pred[:min_rows, :min_cols]
-                print(f"   Sau khi cắt: Y_true {Y_true.shape}, Y_pred {Y_pred.shape}")
+                print(f"   After trimming: Y_true {Y_true.shape}, Y_pred {Y_pred.shape}")
 
             # Compute metrics
             scores = compute_metrics(Y_true, Y_pred, average="macro")
             
-            print(f"\nKẾT QUẢ CUỐI CÙNG:")
+            print(f"\nFINAL RESULTS:")
             print("="*40)
-            print(f"Độ chính xác:  {scores['accuracy']:.4f}")
-            print(f"Độ chính xác (Precision): {scores['precision']:.4f}")
-            print(f"Độ nhạy (Recall):    {scores['recall']:.4f}")
+            print(f"Accuracy:  {scores['accuracy']:.4f}")
+            print(f"Precision: {scores['precision']:.4f}")
+            print(f"Recall:    {scores['recall']:.4f}")
             print(f"F1-score:  {scores['f1']:.4f}")
-            print(f"Tham số: ngưỡng={args.threshold:.2f}, top_k={args.top_k}")
+            print(f"Parameters: threshold={args.threshold:.2f}, top_k={args.top_k}")
 
             # Plot metrics
-            print(f"\nVẽ biểu đồ kết quả...")
-            plot_single_metric(scores["accuracy"], "Độ chính xác")
+            print(f"\nPlotting results...")
+            plot_single_metric(scores["accuracy"], "Accuracy")
             plot_single_metric(scores["precision"], "Precision")
             plot_single_metric(scores["recall"], "Recall")
             plot_single_metric(scores["f1"], "F1-Score")
-            plot_overview(scores, f"Tổng quan kết quả - Model: {args.model.upper()}")
+            plot_overview(scores, f"Results Overview - Model: {args.model.upper()}")
             
             # Plot confusion matrices with detailed debugging
-            print(f"\nVẽ ma trận nhầm lẫn...")
+            print(f"\nPlotting confusion matrices...")
             plot_multilabel_confusion_matrices(Y_true, Y_pred, list(mlb.classes_))
             plot_overall_confusion_matrix(Y_true, Y_pred, list(mlb.classes_))
             
         except Exception as e:
-            print(f"Lỗi trong quá trình đánh giá: {e}")
+            print(f"Error during evaluation: {e}")
             import traceback
             traceback.print_exc()
 
-    print(f"\nHOÀN THÀNH!")
+    print(f"\nCOMPLETED!")
     print("="*60)
 
 
