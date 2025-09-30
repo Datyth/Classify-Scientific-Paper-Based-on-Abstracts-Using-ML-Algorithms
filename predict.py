@@ -1,5 +1,5 @@
+#predict.py
 import os
-import sys
 from pathlib import Path
 import argparse
 import json
@@ -10,25 +10,48 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
 warnings.filterwarnings('ignore')
+from utils.path import model_artifact, label_binarizer_path
 
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
 
+# Determine the project root once using pathlib.  Avoid mutating sys.path.
+ROOT = Path(__file__).resolve().parents[1]
+
+
+#handle a plain .txt full of free-form lines
+def read_texts_any(path):
+    p = Path(path)
+
+    if p.suffix.lower() in {".txt", ".md"}:
+        with open(p, "r", encoding="utf-8", errors="ignore") as f:
+            lines = [ln.strip() for ln in f]
+        texts = [ln for ln in lines if ln]
+        return texts, None 
+    try:
+        df = pd.read_csv(p, encoding="utf-8")
+    except Exception:
+        df = pd.read_csv(p, sep=None, engine="python", encoding="utf-8")
+    if "text_clean" in df.columns:
+        texts = df["text_clean"].astype(str).fillna("").tolist()
+        labels = df["label"].astype(str).fillna("").tolist() if "label" in df.columns else None
+        return texts, labels
+    if df.shape[1] == 1:
+        col = df.columns[0]
+        return df[col].astype(str).fillna("").tolist(), None
+    return [p.read_text(encoding="utf-8", errors="ignore")], None
 
 def setup_paths():
-    art_dir = os.path.join(
-        PROJECT_ROOT,
-        "Apply-Machine-Learning-to-Classify-Scientific-Paper-Based-on-Abstracts-",
-        "clean_data",
-        "artifacts",
+    art_dir = (
+        ROOT
+        / "Apply-Machine-Learning-to-Classify-Scientific-Paper-Based-on-Abstracts-"
+        / "clean_data"
+        / "artifacts"
     )
-    csv_out_dir = os.path.join(
-        PROJECT_ROOT,
-        "Apply-Machine-Learning-to-Classify-Scientific-Paper-Based-on-Abstracts-",
-        "clean_data",
-        "splitted_data",
+    csv_out_dir = (
+        ROOT
+        / "Apply-Machine-Learning-to-Classify-Scientific-Paper-Based-on-Abstracts-"
+        / "clean_data"
+        / "splitted_data"
     )
     return art_dir, csv_out_dir
 
@@ -41,7 +64,7 @@ MODELS = {
 }
 
 
-DEFAULT_MODEL_NAME = "knn"
+DEFAULT_MODEL_NAME = "kmeans"
 DEFAULT_THRESHOLD = 0.35
 DEFAULT_TOP_K_FALLBACK = 1
 
@@ -54,7 +77,6 @@ with a special focus on the quantum generation of cosmological perturbations.
 
 
 def _binarize_with_fallback(A, threshold, top_k, kind="proba"):
-    """Convert probability/score matrix to binary predictions with fallback"""
     if kind == "proba":
         y = (A >= threshold).astype(int)
     else:
@@ -69,7 +91,6 @@ def _binarize_with_fallback(A, threshold, top_k, kind="proba"):
 
 
 def _predict_labels(pipe, texts, mlb, threshold, top_k):
-    """Enhanced prediction function with better error handling for different model types"""
     print(f"Predicting for {len(texts)} texts...")
     
     # Get number of expected classes
@@ -107,19 +128,16 @@ def _predict_labels(pipe, texts, mlb, threshold, top_k):
             
         except Exception as e:
             print(f"predict_proba failed: {e}")
-    
-    # Try decision_function (for SVM-like models)
+
     if hasattr(pipe, "decision_function"):
         try:
             print("Using decision_function...")
             scores = pipe.decision_function(texts)
             if scores.ndim == 1:
-                if n_classes == 2:  # Binary case
+                if n_classes == 2: 
                     scores = np.column_stack([-scores, scores])
                 else:
                     scores = scores.reshape(-1, 1)
-            
-            # Ensure correct shape
             if scores.shape[1] != n_classes:
                 if scores.shape[1] < n_classes:
                     padding = np.zeros((scores.shape[0], n_classes - scores.shape[1]))
@@ -132,7 +150,6 @@ def _predict_labels(pipe, texts, mlb, threshold, top_k):
         except Exception as e:
             print(f"decision_function failed: {e}")
     
-    # Try direct predict (for clustering models like KMeans)
     try:
         print("Using predict...")
         y_pred = pipe.predict(texts)
@@ -141,35 +158,26 @@ def _predict_labels(pipe, texts, mlb, threshold, top_k):
         if isinstance(y_pred, list):
             y_pred = np.asarray(y_pred)
         
-        # Handle different prediction formats
         if y_pred.ndim == 1:
             print("Processing single-class predictions...")
-            # Single class prediction - convert to one-hot
             y_binary = np.zeros((len(y_pred), n_classes), dtype=int)
             for i, class_idx in enumerate(y_pred):
                 if 0 <= int(class_idx) < n_classes:
                     y_binary[i, int(class_idx)] = 1
                 else:
-                    # Fallback to first class if index out of bounds
                     y_binary[i, 0] = 1
             return y_binary
         
         elif y_pred.ndim == 2:
             print("Processing multi-label predictions...")
-            # Multi-label prediction (already binary)
-            
-            # Ensure correct shape
             if y_pred.shape[1] != n_classes:
                 print(f"Warning: Prediction shape {y_pred.shape[1]} != expected {n_classes}")
                 if y_pred.shape[1] < n_classes:
-                    # Pad with zeros
                     padding = np.zeros((y_pred.shape[0], n_classes - y_pred.shape[1]), dtype=int)
                     y_pred = np.hstack([y_pred, padding])
                 else:
-                    # Truncate
                     y_pred = y_pred[:, :n_classes]
             
-            # Apply fallback for empty predictions
             for i in range(y_pred.shape[0]):
                 if y_pred[i].sum() == 0:
                     y_pred[i, 0] = 1  # Assign to first class
@@ -191,7 +199,6 @@ def _predict_labels(pipe, texts, mlb, threshold, top_k):
 
 
 def compute_metrics(y_true, y_pred, average="macro"):
-    """Compute classification metrics with better error handling"""
     from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
     
     try:
@@ -237,7 +244,6 @@ def compute_metrics(y_true, y_pred, average="macro"):
 
 
 def plot_single_metric(value, title):
-    """Plot a single metric bar chart"""
     plt.figure(figsize=(6, 4))
     bars = plt.bar([title], [value], color="#4e79a7", alpha=0.8, edgecolor='black', linewidth=1)
     plt.ylim(0, 1.05)
@@ -256,7 +262,6 @@ def plot_single_metric(value, title):
 
 
 def plot_overview(metrics_dict, title):
-    """Plot overview of all metrics"""
     keys = ["accuracy", "precision", "recall", "f1"]
     vals = [metrics_dict[k] for k in keys]
     colors = ["#4e79a7", "#59a14f", "#f28e2b", "#e15759"]
@@ -282,7 +287,6 @@ def plot_overview(metrics_dict, title):
 
 
 def plot_multilabel_confusion_matrices(y_true, y_pred, class_names):
-    """Plot individual confusion matrices for each class in multilabel classification"""
     from sklearn.metrics import multilabel_confusion_matrix
     
     print("Creating confusion matrices for each class...")
@@ -459,8 +463,8 @@ def main():
     # Setup paths
     art_dir, csv_out_dir = setup_paths()
     test_path = Path(csv_out_dir) / args.texts_file
-    model_path = Path(art_dir) / f"{args.model}.joblib"
-    mlb_path = Path(art_dir) / "label_binarizer.joblib"
+    model_path = model_artifact(args.model) 
+    mlb_path    = label_binarizer_path()
     config_path = Path(art_dir) / "split_config.json"
 
     print(f"\nPaths:")
@@ -468,7 +472,6 @@ def main():
     print(f"- Model: {model_path}")
     print(f"- Label binarizer: {mlb_path}")
 
-    # Check file existence
     if not model_path.exists():
         print(f"Error: Model not found at {model_path}")
         return
@@ -476,8 +479,6 @@ def main():
     if not test_path.exists():
         print(f"Error: Data file not found at {test_path}")
         return
-
-    # Load configuration if available
     if config_path.exists():
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
@@ -488,8 +489,8 @@ def main():
             print(f"- Total samples: {config.get('total_samples', 'Unknown')}")
         except Exception as e:
             print(f"Cannot read config: {e}")
-    
-    # Load model
+
+
     print(f"\nLoading model...")
     arts = load(model_path)
     if hasattr(arts, "pipeline"):
@@ -501,7 +502,7 @@ def main():
         mlb = None
         print("Loaded direct model")
 
-    # Load label binarizer
+
     if mlb is None and mlb_path.exists():
         try:
             mlb = load(mlb_path)
@@ -517,40 +518,24 @@ def main():
         print("No MultiLabelBinarizer available - cannot continue")
         return
 
-    # Load data
+
     print(f"\nReading data from {test_path}")
     try:
-        df = pd.read_csv(test_path, encoding="utf-8")
-        print(f"Read {len(df)} rows of data")
-        print(f"Columns: {list(df.columns)}")
-        
-        if "text_clean" not in df.columns:
-            raise KeyError("Missing 'text_clean' column in CSV file")
-        
-        texts = df["text_clean"].astype(str).fillna("").tolist()
+        texts, labels = read_texts_any(test_path)
         print(f"Read {len(texts)} texts")
-        
-        # Read labels correctly - space-separated as created by data splitter
-        labels = None
-        if "label" in df.columns:
-            label_strings = df["label"].fillna("").astype(str).tolist()
-            print(f"Read {len(label_strings)} label strings")
-            
-            # Show some example labels
-            print("Example label strings:")
-            for i, lbl_str in enumerate(label_strings[:3]):
-                parsed = parse_space_separated_labels(lbl_str)
-                print(f"   {i+1}: '{lbl_str}' -> {parsed}")
-            
-            labels = label_strings
+        if labels is None:
+            print("No labels found (prediction-only mode)")
         else:
-            print("No 'label' column found - performing prediction only")
-            
+            print(f"Read {len(labels)} label strings")
+            print("Example label strings:")
+            for i, s in enumerate(labels[:3]):
+                print(f"   {i+1}: '{s}' -> {parse_space_separated_labels(s)}")
     except Exception as e:
         print(f"Error reading data: {e}")
         return
 
-    # Make predictions
+
+
     print(f"\nSTARTING PREDICTION")
     print("="*60)
     try:
@@ -562,7 +547,7 @@ def main():
         traceback.print_exc()
         return
 
-    # Convert predictions to labels
+
     print(f"\nConverting predictions to labels...")
     try:
         labels_out = [list(label_tuple) for label_tuple in mlb.inverse_transform(y_pred)]
@@ -571,7 +556,7 @@ def main():
         print(f"Error converting labels: {e}")
         labels_out = [["unknown"] for _ in range(len(y_pred))]
 
-    # Display predictions
+
     print(f"\nPREDICTION RESULTS")
     print("="*60)
     
@@ -583,22 +568,19 @@ def main():
     if len(texts) > 5:
         print(f"\n... and {len(texts) - 5} more samples")
 
-    # Evaluate if true labels available
     if labels is not None:
         print(f"\nEVALUATION RESULTS")
         print("="*60)
         
         try:
-            # Parse true labels using the same format as data splitter
             y_true_labels = [parse_space_separated_labels(s) for s in labels]
             print(f"Parsed {len(y_true_labels)} true label lists")
             
-            # Show some examples
+
             print("Example parsed true labels:")
             for i in range(min(3, len(y_true_labels))):
                 print(f"   {i+1}: {y_true_labels[i]}")
             
-            # Transform to binary matrix
             Y_true = mlb.transform(y_true_labels)
             Y_pred = y_pred
             

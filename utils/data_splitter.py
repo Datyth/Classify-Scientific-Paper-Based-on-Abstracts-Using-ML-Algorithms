@@ -1,5 +1,6 @@
-# scripts/data_splitter.py
-import os, sys
+
+# utils/data_splitter.py
+import os
 import argparse
 import json
 from pathlib import Path
@@ -10,10 +11,8 @@ from sklearn.model_selection import train_test_split
 from joblib import dump
 from tqdm import tqdm
 
-# Make package importable when run directly
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+# Compute the project root using pathlib.  Avoid mutating sys.path.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def _parse_labels(raw):
     """Parse raw labels into list of clean labels"""
@@ -35,41 +34,54 @@ def _to_toplevel(lbl: str) -> str:
         return lbl.split(".", 1)[0].lower()
     return lbl.lower()
 
-def _prepare_xy_topcats(df: pd.DataFrame, text_col: str, label_col: str, cats: list[str]):
-    """Prepare X, Y data for top-level categories"""
-    X_text = df[text_col].astype(str)
-    y_raw = df[label_col].apply(_parse_labels)
-    y_top = []
-    keep_rows = []
+def prepare_xy_top_categories(df: pd.DataFrame, text_col: str, label_col: str, cats: list[str]):
+    """
+    Given a DataFrame with text and hierarchical label columns, filter the data
+    to the provided top‑level categories and return the text list,
+    binary label matrix and fitted :class:`sklearn.preprocessing.MultiLabelBinarizer`.
+
+    This helper performs the following steps:
+
+    1. Parse each label cell into a list of lower‑cased tokens.
+    2. Map hierarchical labels like ``cs.LG`` to their top‑level (``cs``).
+    3. Keep only labels that are in the provided ``cats`` set.
+    4. Drop any row with no remaining labels.
+    5. Fit a :class:`MultiLabelBinarizer` over the allowed categories.
+    """
+    text_series = df[text_col].astype(str)
+    raw_labels = df[label_col].apply(_parse_labels)
+    top_labels: list[list[str]] = []
+    keep_mask: list[bool] = []
     catset = set(c.lower() for c in cats)
 
-    print(f"Processing {len(y_raw)} samples for category filtering...")
+    print(f"Processing {len(raw_labels)} samples for category filtering...")
 
-    for i, labels in enumerate(tqdm(y_raw, desc="Filtering categories")):
-        mapped = list({_to_toplevel(l) for l in labels})  
+    for labels in tqdm(raw_labels, desc="Filtering categories"):
+        mapped = { _to_toplevel(l) for l in labels }
         filtered = [t for t in mapped if t in catset]
         if filtered:
-            y_top.append(filtered)
-            keep_rows.append(True)
+            top_labels.append(filtered)
+            keep_mask.append(True)
         else:
-            keep_rows.append(False)
+            keep_mask.append(False)
 
     # Filter rows
-    X_text = X_text[keep_rows].reset_index(drop=True)
-    y_top = pd.Series(y_top)
-    mlb = MultiLabelBinarizer(classes=sorted(catset))
-    Y = mlb.fit_transform(y_top)
+    text_series = text_series[keep_mask].reset_index(drop=True)
+    # Fit the label binarizer on the filtered list of label lists
+    label_binarizer = MultiLabelBinarizer(classes=sorted(catset))
+    label_matrix = label_binarizer.fit_transform(top_labels)
 
-    return X_text.tolist(), Y, mlb
+    return text_series.tolist(), label_matrix, label_binarizer
 
 def setup_paths(args):
     """Setup file paths based on arguments"""
-    csv_path = os.path.join(PROJECT_ROOT,"clean_data", "data", args.data_file)
-    art_dir = os.path.join(PROJECT_ROOT,"clean_data", "artifacts")
-    csv_out_dir = os.path.join(PROJECT_ROOT, "clean_data","splitted_data")
-
-    Path(art_dir).mkdir(parents=True, exist_ok=True)
-    Path(csv_out_dir).mkdir(parents=True, exist_ok=True)
+    # Use pathlib.Path to build platform‑independent paths
+    csv_path = PROJECT_ROOT / "clean_data" / "data" / args.data_file
+    art_dir = PROJECT_ROOT / "clean_data" / "artifacts"
+    csv_out_dir = PROJECT_ROOT / "clean_data" / "splitted_data"
+    # Ensure the output directories exist
+    art_dir.mkdir(parents=True, exist_ok=True)
+    csv_out_dir.mkdir(parents=True, exist_ok=True)
     return csv_path, art_dir, csv_out_dir
 
 def main():
@@ -123,14 +135,18 @@ def main():
         print(f"Error loading data: {e}")
         return 1
 
-    # Prepare X, Y data
+    # Prepare the text list, binary label matrix and label binarizer.  The helper
+    # ``prepare_xy_top_categories`` maps hierarchical labels to top‑level
+    # categories and filters out rows without allowed labels.
     try:
-        X_text, Y, mlb = _prepare_xy_topcats(df, args.text_col, args.label_col, args.categories)
-        print(f"Prepared data - Samples kept: {len(X_text)}")
-        print(f"Classes: {list(mlb.classes_)}")
+        texts, label_matrix, label_binarizer = prepare_xy_top_categories(
+            df, args.text_col, args.label_col, args.categories
+        )
+        print(f"Prepared data - Samples kept: {len(texts)}")
+        print(f"Classes: {list(label_binarizer.classes_)}")
         print("Label counts:")
-        label_counts = pd.Series(Y.sum(axis=0), index=mlb.classes_).astype(int)
-        for class_name, count in label_counts.items():
+        counts = pd.Series(label_matrix.sum(axis=0), index=label_binarizer.classes_).astype(int)
+        for class_name, count in counts.items():
             print(f"   - {class_name}: {count}")
     except Exception as e:
         print(f"Error preparing data: {e}")
@@ -142,21 +158,21 @@ def main():
         try:
             from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
             msss = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=args.test_size, random_state=args.seed)
-            idx = np.arange(len(X_text))
-            (train_idx, val_idx) = next(msss.split(idx, Y))
+            idx = np.arange(len(texts))
+            (train_idx, val_idx) = next(msss.split(idx, label_matrix))
             print("Used MultilabelStratifiedShuffleSplit")
         except ImportError:
             print("iterative-stratification not found; using random split")
-            idx = np.arange(len(X_text))
+            idx = np.arange(len(texts))
             train_idx, val_idx = train_test_split(idx, test_size=args.test_size, random_state=args.seed, shuffle=True)
 
         # Build splits
-        X_train = [X_text[i] for i in train_idx]
-        Y_train = Y[train_idx]
-        X_val = [X_text[i] for i in val_idx]
-        Y_val = Y[val_idx]
+        texts_train = [texts[i] for i in train_idx]
+        labels_train_bin = label_matrix[train_idx]
+        texts_val = [texts[i] for i in val_idx]
+        labels_val_bin = label_matrix[val_idx]
 
-        print(f"Train samples: {len(X_train)}, Validation samples: {len(X_val)}")
+        print(f"Train samples: {len(texts_train)}, Validation samples: {len(texts_val)}")
 
     except Exception as e:
         print(f"Error splitting data: {e}")
@@ -169,22 +185,22 @@ def main():
         # Save train split
         train_path = Path(csv_out_dir) / "train_split.csv"
         pd.DataFrame({
-            args.text_col: X_train,
-            args.label_col: [" ".join(labs) for labs in mlb.inverse_transform(Y_train)]
+            args.text_col: texts_train,
+            args.label_col: [" ".join(labs) for labs in label_binarizer.inverse_transform(labels_train_bin)]
         }).to_csv(train_path, index=False)
         print(f"Saved training split -> {train_path}")
 
         # Save validation split
         val_path = Path(csv_out_dir) / "val_split.csv"
         pd.DataFrame({
-            args.text_col: X_val,
-            args.label_col: [" ".join(labs) for labs in mlb.inverse_transform(Y_val)]
+            args.text_col: texts_val,
+            args.label_col: [" ".join(labs) for labs in label_binarizer.inverse_transform(labels_val_bin)]
         }).to_csv(val_path, index=False)
         print(f"Saved validation split -> {val_path}")
 
         # Save label binarizer
         mlb_path = Path(art_dir) / "label_binarizer.joblib"
-        dump(mlb, mlb_path, compress=3, protocol=5)
+        dump(label_binarizer, mlb_path, compress=3, protocol=5)
         print(f"Saved label binarizer -> {mlb_path}")
 
         # Save split configuration
@@ -195,10 +211,10 @@ def main():
             "label_col": args.label_col,
             "seed": args.seed,
             "test_size": args.test_size,
-            "classes": list(mlb.classes_),
-            "train_samples": len(X_train),
-            "val_samples": len(X_val),
-            "total_samples": len(X_text)
+            "classes": list(label_binarizer.classes_),
+            "train_samples": len(texts_train),
+            "val_samples": len(texts_val),
+            "total_samples": len(texts)
         }
 
         with open(config_path, 'w', encoding='utf-8') as f:

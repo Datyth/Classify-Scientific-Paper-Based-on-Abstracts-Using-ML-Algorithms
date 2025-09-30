@@ -1,5 +1,4 @@
-
-from __future__ import annotations
+# models/base/base.py
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -57,34 +56,59 @@ class BaseModel(ABC):
         return OneVsRestClassifier(estimator)
 
     def fit(self, texts: Iterable[str], labels: Optional[Iterable[Iterable[str]]] = None) -> "BaseModel":
-        sb = SBERTVectorizer()  # default 'all-MiniLM-L6-v2'
-        steps = [("sbert", sb)]
+        """
+        Fit the model on a collection of texts and optional multi‑label targets.
 
+        A sentence‑BERT vectorizer generates embeddings for each text.  The
+        resulting embeddings are fed into the estimator returned by
+        ``_build_estimator``.  If labels are provided, they are binarized
+        using :class:`~sklearn.preprocessing.MultiLabelBinarizer` and the
+        classifier is wrapped in ``OneVsRestClassifier`` for multi‑label
+        classification.  Without labels, the pipeline trains in an
+        unsupervised manner (e.g. KMeans).
+        """
+        # Instantiate the SBERT vectorizer once.  Using a descriptive name
+        # helps clarify what this component does in the pipeline.
+        sbert_vectorizer = SBERTVectorizer()  # default 'all-MiniLM-L6-v2'
+        steps = [("sbert", sbert_vectorizer)]
+
+        # Build the core estimator.  In supervised settings this will be
+        # wrapped by ``_wrap_supervised`` to handle multi‑label problems.
         estimator = self._build_estimator()
-        clf = self._wrap_supervised(estimator)
-        steps.append(("clf", clf))
+        classifier = self._wrap_supervised(estimator)
+        steps.append(("clf", classifier))
 
-        pipe = Pipeline(steps)
+        # Assemble the scikit‑learn pipeline.
+        model_pipeline = Pipeline(steps)
 
-        mlb = None
+        # Prepare a MultiLabelBinarizer if labels are given.  Use a clear
+        # variable name so downstream code is explicit.
+        label_binarizer: Optional[MultiLabelBinarizer] = None
         if labels is not None:
-            # labels: iterable of iterables OR strings -> binarize
-            y_list = []
+            # Convert labels into a list of lists of strings.  Accept either
+            # nested iterables or semi‑colon/space/comma separated strings.
+            label_sequences: List[List[str]] = []
             for y in labels:
                 if y is None:
-                    y_list.append([])
+                    label_sequences.append([])
                 elif isinstance(y, str):
-                    toks = [t for t in str(y).replace(";", " ").replace(",", " ").split() if t]
-                    y_list.append(toks)
+                    # Split on semicolons or commas and drop empty tokens
+                    tokens = [t for t in str(y).replace(";", " ").replace(",", " ").split() if t]
+                    label_sequences.append(tokens)
                 else:
-                    y_list.append([str(t).strip() for t in y if str(t).strip()])
-            mlb = MultiLabelBinarizer()
-            Y = mlb.fit_transform(y_list)
-            pipe.fit(list(texts), Y)
+                    label_sequences.append([str(t).strip() for t in y if str(t).strip()])
+            label_binarizer = MultiLabelBinarizer()
+            label_matrix = label_binarizer.fit_transform(label_sequences)
+            # Fit the pipeline on texts and their binary label matrix.  The
+            # ``list(texts)`` call forces evaluation of the generator if needed.
+            model_pipeline.fit(list(texts), label_matrix)
         else:
-            pipe.fit(list(texts))
+            # Unsupervised or single‑label case: fit only on texts.
+            model_pipeline.fit(list(texts))
 
-        self.artifacts = FitArtifacts(pipeline=pipe, mlb=mlb)
+        # Save fitted pipeline and label binarizer in FitArtifacts.  Use
+        # descriptive attribute names for clarity.
+        self.artifacts = FitArtifacts(pipeline=model_pipeline, mlb=label_binarizer)
         return self
 
     def predict(self, texts: Iterable[str]) -> List[List[str]]:

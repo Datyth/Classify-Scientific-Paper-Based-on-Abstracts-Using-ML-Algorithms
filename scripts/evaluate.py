@@ -1,7 +1,7 @@
 # scripts/evaluate.py
 # =========================================
 ART_DIR     = r"data/artifacts"
-MODEL_NAME  = "decision_tree"   # "knn" | "decision_tree" | "mlp" | "kmeans" | "transformer"
+MODEL_NAME  = "decision_tree"   # "knn" | "decision_tree" | "mlp" | "kmeans" |
 CSV_PATH    = r"data/csv/val_split.csv"
 TEXT_COL    = "text_clean"
 LABEL_COL   = "label"
@@ -13,12 +13,7 @@ TOP_K_FALLBACK = 1     # ensure at least k labels per sample
 BATCH_SIZE  = 256      # embed/predict in batches to save RAM
 # =========================================
 
-import os, sys
 from pathlib import Path
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
 import re
 import numpy as np
 import pandas as pd
@@ -90,45 +85,50 @@ def main():
 
     # Load data
     df = pd.read_csv(CSV_PATH).dropna(subset=[TEXT_COL, LABEL_COL]).reset_index(drop=True)
-    X_text = df[TEXT_COL].astype(str)
-    y_raw  = df[LABEL_COL].apply(_parse_labels)
+    # Extract the series of text documents as strings.  Avoid the opaque
+    # ``X_text`` name so downstream code is self‑documenting.
+    text_series = df[TEXT_COL].astype(str)
+    # Parse the raw label strings into lists of tokens using the helper.
+    raw_labels = df[LABEL_COL].apply(_parse_labels)
 
-    # Map labels to top-level and keep only the 5 categories
-    y_mapped = _map_and_filter_labels(y_raw, CATEGORIES_TO_SELECT)
-    keep = pd.Series([len(l) > 0 for l in y_mapped])
-    X_text = X_text[keep].reset_index(drop=True)
-    y_mapped = [y for i, y in enumerate(y_mapped) if keep.iloc[i]]
+    # Map labels to top‑level and keep only the allowed categories.
+    mapped_labels = _map_and_filter_labels(raw_labels, CATEGORIES_TO_SELECT)
+    # Keep only rows that have at least one allowed category.  Use a
+    # descriptive mask name rather than the generic ``keep``.
+    keep_mask = pd.Series([len(l) > 0 for l in mapped_labels])
+    text_series = text_series[keep_mask].reset_index(drop=True)
+    mapped_labels = [y for i, y in enumerate(mapped_labels) if keep_mask.iloc[i]]
 
-    if len(X_text) == 0:
+    # If no examples remain after filtering, bail out early.
+    if len(text_series) == 0:
         print("No samples left after filtering to allowed categories.")
         return
 
     # Build a fixed ML Binarizer over exactly these 5 classes (sorted for stability)
     # Use the *saved* mlb classes if available and compatible; otherwise enforce our 5.
     allowed_sorted = sorted({c.lower() for c in CATEGORIES_TO_SELECT})
+    # If no MultiLabelBinarizer came from the model, build one over the allowed classes.
     if mlb is None:
         mlb = MultiLabelBinarizer(classes=allowed_sorted)
-        Y_true = mlb.fit_transform(y_mapped)
+        Y_true = mlb.fit_transform(mapped_labels)
     else:
-        # If the trained mlb already matches these 5, great; if not, rebuild for evaluation
+        # If the trained binarizer classes differ, rebuild it to ensure the
+        # evaluation runs on a consistent label set.
         trained_classes = [c.lower() for c in mlb.classes_]
         if sorted(trained_classes) != allowed_sorted:
             mlb = MultiLabelBinarizer(classes=allowed_sorted)
-        Y_true = mlb.fit_transform(y_mapped)
+        Y_true = mlb.fit_transform(mapped_labels)
 
     # Predict in batches
     preds = []
-    n = len(X_text)
-    for s in range(0, n, BATCH_SIZE):
-        e = min(s + BATCH_SIZE, n)
-        batch = list(X_text.iloc[s:e])
+    n = len(text_series)
+    for start in range(0, n, BATCH_SIZE):
+        end = min(start + BATCH_SIZE, n)
+        batch = list(text_series.iloc[start:end])
         yb = _predict_batch(pipe, batch)
-        # If KMeans (1D), convert to 5-way one-hot by mapping cluster IDs to a class if you have a mapping.
-        # Here we assume supervised models; if yb is 1D we just turn it into zeros (unknown).
         if not isinstance(yb, np.ndarray):
             yb = np.asarray(yb)
         if yb.ndim == 1:
-            # no supervised probabilities – create all-zeros (no label) to avoid shape errors
             yb = np.zeros((yb.shape[0], len(mlb.classes_)), dtype=int)
         preds.append(yb)
 

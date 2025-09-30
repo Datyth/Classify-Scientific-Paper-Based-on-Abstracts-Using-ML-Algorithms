@@ -1,5 +1,6 @@
-# scripts/train_model.py
-import os, sys
+
+# train.py
+import os
 import argparse
 import json
 from pathlib import Path
@@ -7,67 +8,61 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MultiLabelBinarizer
 from joblib import dump, load
+from utils.path import data_dirs
 
-# Make package importable when run directly
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+# Attempt to import the model factory.  If the package is not installed,
+# fall back to temporarily adding the parent directory to sys.path.  This
+# avoids permanently modifying sys.path while supporting local development.
+from models.base.factory import ModelFactory
 
-# Available models dictionary
-MODELS = {
-    "knn": "models.knn.KNNClassifier",
-    "decision_tree": "models.decision_tree.DecisionTreeClassifier", 
-    "kmeans": "models.k_means.KMeansClassifier",
-    "transformer": "models.transformer.TransformerModel"
-}
 
-def import_model_class(model_key: str):
+# Expose the available model names to argparse from the factory registry.
+MODEL_CHOICES = ModelFactory.choices()
+
+def load_split_data(csv_out_dir: Path, art_dir: Path, text_col: str, label_col: str):
     """
-    Dynamically import model class only when needed to avoid environment conflicts.
+    Load pre‑split data and the fitted MultiLabelBinarizer.
 
-    Args:
-        model_key: Key from MODELS dict
+    Parameters
+    ----------
+    csv_out_dir : Path
+        Directory containing ``train_split.csv`` and ``val_split.csv``.
+    art_dir : Path
+        Directory containing ``label_binarizer.joblib``.
+    text_col : str
+        Column name for the text field.
+    label_col : str
+        Column name for the space‑separated labels.
 
-    Returns:
-        Model class
+    Returns
+    -------
+    texts_train : list[str]
+        The list of training texts.
+    label_matrix_train : np.ndarray
+        Binary matrix of shape (n_train, n_classes) for the training labels.
+    texts_val : list[str]
+        The list of validation texts.
+    label_matrix_val : np.ndarray
+        Binary matrix of shape (n_val, n_classes) for the validation labels.
+    label_binarizer : MultiLabelBinarizer
+        The fitted label binarizer used to transform labels.
     """
-    if model_key not in MODELS:
-        raise ValueError(f"Unknown model: {model_key}. Available: {list(MODELS.keys())}")
-
-    module_path, class_name = MODELS[model_key].rsplit('.', 1)
-
-    try:
-        print(f"Importing {class_name} from {module_path}...")
-        module = __import__(module_path, fromlist=[class_name])
-        model_class = getattr(module, class_name)
-        return model_class
-    except ImportError as e:
-        print(f"Failed to import {class_name}: {e}")
-        print(f"Make sure the required dependencies for {model_key} are installed")
-        raise
-    except AttributeError as e:
-        print(f"Class {class_name} not found in {module_path}: {e}")
-        raise
-
-def load_split_data(csv_out_dir, art_dir, text_col, label_col):
-    """Load pre-split data and label binarizer"""
-
-    # Load train data
-    train_path = Path(csv_out_dir) / "train_split.csv"
+    # Load splits
+    train_path = csv_out_dir / "train_split.csv"
     train_df = pd.read_csv(train_path)
-    X_train = train_df[text_col].tolist()
-
-    # Load validation data  
-    val_path = Path(csv_out_dir) / "val_split.csv"
+    val_path = csv_out_dir / "val_split.csv"
     val_df = pd.read_csv(val_path)
-    X_val = val_df[text_col].tolist()
+
+    # Read text columns as strings
+    texts_train = train_df[text_col].astype(str).tolist()
+    texts_val = val_df[text_col].astype(str).tolist()
 
     # Load label binarizer
-    mlb_path = Path(art_dir) / "label_binarizer.joblib"
-    mlb = load(mlb_path)
+    mlb_path = art_dir / "label_binarizer.joblib"
+    label_binarizer: MultiLabelBinarizer = load(mlb_path)
 
-    # Convert labels back to binary format
-    def parse_labels_from_string(label_string):
+    # Parse labels from space‑separated strings
+    def parse_labels_from_string(label_string: str) -> list[str]:
         if pd.isna(label_string) or label_string == "":
             return []
         return label_string.split()
@@ -75,23 +70,22 @@ def load_split_data(csv_out_dir, art_dir, text_col, label_col):
     train_labels = train_df[label_col].apply(parse_labels_from_string).tolist()
     val_labels = val_df[label_col].apply(parse_labels_from_string).tolist()
 
-    Y_train = mlb.transform(train_labels)
-    Y_val = mlb.transform(val_labels)
+    # Transform to binary matrices
+    label_matrix_train = label_binarizer.transform(train_labels)
+    label_matrix_val = label_binarizer.transform(val_labels)
 
-    return X_train, Y_train, X_val, Y_val, mlb
+    return texts_train, label_matrix_train, texts_val, label_matrix_val, label_binarizer
 
 def setup_paths():
-    """Setup file paths"""
-    art_dir = os.path.join(PROJECT_ROOT, "Apply-Machine-Learning-to-Classify-Scientific-Paper-Based-on-Abstracts-", "clean_data", "artifacts")
-    csv_out_dir = os.path.join(PROJECT_ROOT, "Apply-Machine-Learning-to-Classify-Scientific-Paper-Based-on-Abstracts-", "clean_data", "splitted_data")
-    return art_dir, csv_out_dir
+    art_dir, data_dir, splits_dir = data_dirs()
+    return art_dir, splits_dir, data_dir
 
 def main():
     parser = argparse.ArgumentParser(
         description="Train machine learning model for scientific paper classification")
 
-    parser.add_argument("--model", type=str, choices=MODELS.keys(),
-                        help=f"Name of the model to train. Choices: {list(MODELS.keys())}")
+    parser.add_argument("--model", type=str, choices=MODEL_CHOICES,
+                        help=f"Name of the model to train. Choices: {MODEL_CHOICES}")
 
     parser.add_argument("--text_col", type=str, default="text_clean",
                         help="Name of the text column")
@@ -107,7 +101,7 @@ def main():
     print(f"   - Text column: {args.text_col}")
     print(f"   - Label column: {args.label_col}")
 
-    # Setup paths
+    # Setup paths relative to the project root
     try:
         art_dir, csv_out_dir = setup_paths()
         print(f"Artifacts dir: {art_dir}")
@@ -130,23 +124,22 @@ def main():
         print("Make sure to run data_splitter.py first!")
         return 1
 
-    # Load pre-split data
+    # Load pre‑split data
     try:
-        print("Loading pre-split data...")
-        X_train, Y_train, X_val, Y_val, mlb = load_split_data(
+        print("Loading pre‑split data...")
+        texts_train, label_matrix_train, texts_val, label_matrix_val, label_binarizer = load_split_data(
             csv_out_dir, art_dir, args.text_col, args.label_col
         )
-        print(f"Loaded train data: {len(X_train)} samples")
-        print(f"Loaded validation data: {len(X_val)} samples")
+        print(f"Loaded train data: {len(texts_train)} samples")
+        print(f"Loaded validation data: {len(texts_val)} samples")
     except Exception as e:
         print(f"Error loading split data: {e}")
         print("Make sure to run data_splitter.py first!")
         return 1
 
-    # Import and create model
+    # Import and create model using ModelFactory
     try:
-        ModelClass = import_model_class(args.model)
-        model = ModelClass()
+        model = ModelFactory.create(args.model)
         print(f"Successfully created {args.model} model")
     except Exception as e:
         print(f"Failed to create {args.model} model: {e}")
@@ -155,8 +148,9 @@ def main():
     # Train model
     try:
         print(f"Training {args.model} model...")
-        labels_train = mlb.inverse_transform(Y_train)
-        model.fit(X_train, labels=labels_train)
+        # Inverse transform the binary label matrix back to lists of labels
+        labels_train = label_binarizer.inverse_transform(label_matrix_train)
+        model.fit(texts_train, labels=labels_train)
         print("Model training completed!")
     except Exception as e:
         print(f"Error during model training: {e}")
@@ -176,9 +170,9 @@ def main():
             "model_name": args.model,
             "text_col": args.text_col,
             "label_col": args.label_col,
-            "classes": list(mlb.classes_),
-            "train_samples": len(X_train),
-            "val_samples": len(X_val)
+            "classes": list(label_binarizer.classes_),
+            "train_samples": len(texts_train),
+            "val_samples": len(texts_val),
         }
 
         with open(train_config_path, 'w', encoding='utf-8') as f:

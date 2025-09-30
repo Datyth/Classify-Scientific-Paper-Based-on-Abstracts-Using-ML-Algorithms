@@ -1,11 +1,10 @@
-# models/classifiers/kmeans.py
-from __future__ import annotations
+# models/kmeans.py
 from typing import Optional
 import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.cluster import KMeans
 
-from models.base.base import BaseModel  # adjust path if different
+from models.base.base import BaseModel 
 
 class KMeansLabelMapper(BaseEstimator, ClassifierMixin):
     """KMeans + majority-label mapping → returns one-hot over n_labels."""
@@ -69,3 +68,15 @@ class KMeansClassifier(BaseModel):
     def _wrap_supervised(self, estimator):
         # IMPORTANT: don't wrap KMeans in OneVsRest
         return estimator
+#models/knn.py
+from sklearn.neighbors import KNeighborsClassifier
+from .base.base import BaseModel
+
+class KNNClassifier(BaseModel):
+    def __init__(self, n_neighbors: int = 5, weights: str = "distance", **kwargs):
+        super().__init__(**kwargs)
+        self.n_neighbors = n_neighbors
+        self.weights = weights
+
+    def _build_estimator(self):
+        return KNeighborsClassifier(n_neighbors=self.n_neighbors, weights=self.weights)

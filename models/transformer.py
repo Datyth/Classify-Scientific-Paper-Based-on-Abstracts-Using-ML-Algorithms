@@ -1,4 +1,4 @@
-
+#models/transformer.py
 from typing import Iterable, List, Optional
 import numpy as np
 from sklearn.linear_model import LogisticRegression
@@ -6,7 +6,7 @@ from sklearn.multiclass import OneVsRestClassifier
 from sklearn.preprocessing import MultiLabelBinarizer
 from sklearn.pipeline import Pipeline
 
-from .base.base import BaseModel, FitArtifacts, SBERTVectorizer  # NOTE: relative import
+from .base.base import BaseModel, FitArtifacts, SBERTVectorizer  
 
 class TransformerClassifier(BaseModel):
     """Classifier using SBERT embeddings."""
