@@ -2,7 +2,5 @@
 Final Project in AI subject: Apply Machine Learning to Classify Scientific Paper Based on Abstracts 
 
 
-Force push mat cai readme r :((((((((((((
-python -m train de train
-python -m predict de predict, nho nhap vo text truoc
-doi model thi co san comment
+python st.py  de run local cho test
+python train.py --model "model_name"   de train
