@@ -9,59 +9,23 @@ import pandas as pd
 from sklearn.preprocessing import MultiLabelBinarizer
 from joblib import dump, load
 from utils.path import data_dirs
-
-# Attempt to import the model factory.  If the package is not installed,
-# fall back to temporarily adding the parent directory to sys.path.  This
-# avoids permanently modifying sys.path while supporting local development.
 from models.base.factory import ModelFactory
 
-
-# Expose the available model names to argparse from the factory registry.
 MODEL_CHOICES = ModelFactory.choices()
 
 def load_split_data(csv_out_dir: Path, art_dir: Path, text_col: str, label_col: str):
-    """
-    Load pre‑split data and the fitted MultiLabelBinarizer.
-
-    Parameters
-    ----------
-    csv_out_dir : Path
-        Directory containing ``train_split.csv`` and ``val_split.csv``.
-    art_dir : Path
-        Directory containing ``label_binarizer.joblib``.
-    text_col : str
-        Column name for the text field.
-    label_col : str
-        Column name for the space‑separated labels.
-
-    Returns
-    -------
-    texts_train : list[str]
-        The list of training texts.
-    label_matrix_train : np.ndarray
-        Binary matrix of shape (n_train, n_classes) for the training labels.
-    texts_val : list[str]
-        The list of validation texts.
-    label_matrix_val : np.ndarray
-        Binary matrix of shape (n_val, n_classes) for the validation labels.
-    label_binarizer : MultiLabelBinarizer
-        The fitted label binarizer used to transform labels.
-    """
-    # Load splits
     train_path = csv_out_dir / "train_split.csv"
     train_df = pd.read_csv(train_path)
     val_path = csv_out_dir / "val_split.csv"
     val_df = pd.read_csv(val_path)
-
-    # Read text columns as strings
     texts_train = train_df[text_col].astype(str).tolist()
     texts_val = val_df[text_col].astype(str).tolist()
 
-    # Load label binarizer
+
     mlb_path = art_dir / "label_binarizer.joblib"
     label_binarizer: MultiLabelBinarizer = load(mlb_path)
 
-    # Parse labels from space‑separated strings
+
     def parse_labels_from_string(label_string: str) -> list[str]:
         if pd.isna(label_string) or label_string == "":
             return []
@@ -103,7 +67,7 @@ def main():
 
     # Setup paths relative to the project root
     try:
-        art_dir, csv_out_dir = setup_paths()
+        art_dir, csv_out_dir, data_dir = setup_paths()
         print(f"Artifacts dir: {art_dir}")
         print(f"CSV output dir: {csv_out_dir}")
     except Exception as e:

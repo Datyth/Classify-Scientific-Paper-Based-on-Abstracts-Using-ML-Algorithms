@@ -1,0 +1,14 @@
+{
+  "model_name": "knn",
+  "text_col": "text_clean",
+  "label_col": "label",
+  "classes": [
+    "astro-ph",
+    "cond-mat",
+    "cs",
+    "math",
+    "physics"
+  ],
+  "train_samples": 3416,
+  "val_samples": 855
+}
