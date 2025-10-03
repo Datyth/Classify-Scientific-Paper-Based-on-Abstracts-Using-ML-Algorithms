@@ -9,6 +9,6 @@
     "math",
     "physics"
   ],
-  "train_samples": 3416,
-  "val_samples": 855
+  "train_samples": 12644,
+  "val_samples": 3182
 }

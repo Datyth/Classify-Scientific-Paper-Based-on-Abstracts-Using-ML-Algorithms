@@ -1,9 +1,9 @@
 {
   "categories": [
-    "astro-ph",
-    "cond-mat",
-    "cs",
     "math",
+    "cs",
+    "cond-mat",
+    "astro-ph",
     "physics"
   ],
   "text_col": "text_clean",
@@ -17,7 +17,7 @@
     "math",
     "physics"
   ],
-  "train_samples": 3416,
-  "val_samples": 855,
-  "total_samples": 4271
+  "train_samples": 12644,
+  "val_samples": 3182,
+  "total_samples": 15826
 }

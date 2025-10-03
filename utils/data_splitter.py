@@ -35,19 +35,6 @@ def _to_toplevel(lbl: str) -> str:
     return lbl.lower()
 
 def prepare_xy_top_categories(df: pd.DataFrame, text_col: str, label_col: str, cats: list[str]):
-    """
-    Given a DataFrame with text and hierarchical label columns, filter the data
-    to the provided top‑level categories and return the text list,
-    binary label matrix and fitted :class:`sklearn.preprocessing.MultiLabelBinarizer`.
-
-    This helper performs the following steps:
-
-    1. Parse each label cell into a list of lower‑cased tokens.
-    2. Map hierarchical labels like ``cs.LG`` to their top‑level (``cs``).
-    3. Keep only labels that are in the provided ``cats`` set.
-    4. Drop any row with no remaining labels.
-    5. Fit a :class:`MultiLabelBinarizer` over the allowed categories.
-    """
     text_series = df[text_col].astype(str)
     raw_labels = df[label_col].apply(_parse_labels)
     top_labels: list[list[str]] = []
@@ -88,7 +75,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Split and prepare data for machine learning model training")
 
-    parser.add_argument("--data_file", type=str, default="arxiv_clean_sample-5k.csv",
+    parser.add_argument("--data_file", type=str, default="arxiv_clean_sample-20k.csv",
                         help="CSV file name in the data directory")
 
     parser.add_argument("--text_col", type=str, default="text_clean",
@@ -98,7 +85,7 @@ def main():
                         help="Name of the label column")
 
     parser.add_argument("--categories", nargs='+', 
-                        default=['astro-ph', 'cond-mat', 'cs', 'math', 'physics'],
+                        default=["math", "cs", "cond-mat", "astro-ph", "physics"],
                         help="List of categories to select")
 
     parser.add_argument("--seed", type=int, default=42,
