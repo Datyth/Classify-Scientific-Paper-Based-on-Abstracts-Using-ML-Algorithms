@@ -11,7 +11,53 @@ import seaborn as sns
 import warnings
 warnings.filterwarnings('ignore')
 from utils.path import model_artifact, label_binarizer_path
+import sys
 
+# SBERTVectorizer (you already added this one)
+try:
+    from models.base.base import SBERTVectorizer as _SBERTVectorizer
+    sys.modules.setdefault('predict', sys.modules[__name__])
+    setattr(sys.modules['predict'], 'SBERTVectorizer', _SBERTVectorizer)
+except Exception:
+    pass
+
+# _KMeansMajority function used inside KMeans pipeline
+try:
+    from models.k_means import _KMeansMajority as __KMeansMajority
+    sys.modules.setdefault('predict', sys.modules[__name__])
+    setattr(sys.modules['predict'], '_KMeansMajority', __KMeansMajority)
+except Exception:
+    pass
+def _cpu_safe_joblib_load(path):
+    """
+    Load a joblib artifact that may contain Torch objects saved on CUDA,
+    forcing everything to map to CPU regardless of how torch is called internally.
+    """
+    import torch
+    import torch.serialization as ts
+    from joblib import load as _jl_load
+
+    # Keep originals so we can restore after load
+    _orig_ts_load = ts.load
+    _orig_torch_load = torch.load
+
+    def _ts_load_cpu(f, *args, **kwargs):
+        kwargs.setdefault('map_location', 'cpu')
+        return _orig_ts_load(f, *args, **kwargs)
+
+    def _torch_load_cpu(f, *args, **kwargs):
+        kwargs.setdefault('map_location', 'cpu')
+        return _orig_torch_load(f, *args, **kwargs)
+
+    # Monkeypatch both entry points used by torch deserialization
+    ts.load = _ts_load_cpu
+    torch.load = _torch_load_cpu
+    try:
+        return _jl_load(path)
+    finally:
+        # Always restore originals so the rest of your process isn't affected
+        ts.load = _orig_ts_load
+        torch.load = _orig_torch_load
 
 
 # Determine the project root once using pathlib.  Avoid mutating sys.path.
@@ -492,7 +538,7 @@ def main():
 
 
     print(f"\nLoading model...")
-    arts = load(model_path)
+    arts = _cpu_safe_joblib_load(model_path)
     if hasattr(arts, "pipeline"):
         pipe = arts.pipeline
         mlb = getattr(arts, "mlb", None)
